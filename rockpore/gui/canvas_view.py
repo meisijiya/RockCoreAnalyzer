@@ -111,7 +111,8 @@ class CanvasView(QFrame):
         # 构建 UI
         self._build_ui()
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setMinimumSize(500, 400)
+        # 降低最小高度 400→320,让 step_stack 有更多空间(从审查建议)
+        self.setMinimumSize(500, 320)
         # 鼠标追踪
         self._canvas.setMouseTracking(True)
         self._canvas.setFocusPolicy(Qt.StrongFocus)

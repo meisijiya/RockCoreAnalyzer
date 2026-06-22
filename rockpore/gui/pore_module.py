@@ -317,10 +317,12 @@ class Step4Preprocess(QWidget):
         opts.addWidget(self.gray_check)
         opts.addStretch(1)
         form.addLayout(opts)
-        # 应用按钮
+        # 应用按钮 - P2 修复: 防纵向裁剪
         apply_btn = QPushButton("✅ 应用所有设置")
         apply_btn.setObjectName("primaryButton")
-        apply_btn.setMinimumHeight(40)
+        apply_btn.setMinimumHeight(44)
+        apply_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        apply_btn.setText("✅ 应用所有设置")  # 显式设置防文字截断
         apply_btn.clicked.connect(self._apply_params)
         form.addWidget(apply_btn)
         form_card._layout.addLayout(form)
@@ -554,6 +556,8 @@ class Step6Edit(QWidget):
         self.min_area.setValue(10)
         apply_btn = QPushButton("应用")
         apply_btn.setObjectName("primaryButton")
+        apply_btn.setMinimumHeight(36)
+        apply_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         apply_btn.clicked.connect(self._apply)
         form.addRow("操作:", self.op)
         form.addRow("核大小:", self.kernel)
@@ -561,6 +565,9 @@ class Step6Edit(QWidget):
         form.addRow("最小面积(去噪):", self.min_area)
         form.addRow(apply_btn)
         form_card._layout.addLayout(form)
+        # P2 修复: form_card 加最小高度,防止被压扁
+        form_card.setMinimumHeight(320)
+        form_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         v.addWidget(form_card)
         # 撤销
         h = QHBoxLayout()
@@ -652,7 +659,7 @@ class Step8Analyze(QWidget):
         h.addWidget(self.show_all_btn)
         h.addStretch(1)
         v.addLayout(h)
-        # 数据卡片
+        # 数据卡片 - P0 修复: 强制最小高度 78px 防止被压成 0
         cards_grid = QGridLayout()
         cards_grid.setSpacing(10)
         self._cards = {}
@@ -667,17 +674,26 @@ class Step8Analyze(QWidget):
             r, c = divmod(i, 3)
             frame = QFrame()
             frame.setObjectName("dataCard")
+            # 关键修复: 强制最小高度,防止被压扁
+            frame.setMinimumHeight(78)
+            frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             fv = QVBoxLayout(frame)
             fv.setContentsMargins(10, 8, 10, 8)
             lab = QLabel(label)
             lab.setObjectName("dataCardLabel")
             val = QLabel("-")
             val.setObjectName("dataCardValue")
+            val.setMinimumHeight(30)  # 数字本身最小高度
+            val.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             fv.addWidget(lab)
             fv.addWidget(val)
             self._cards[key] = val
             cards_grid.addWidget(frame, r, c)
-        v.addLayout(cards_grid)
+        # 包一层 QWidget 强制 stretch=0(不抢表格空间)
+        cards_widget = QWidget()
+        cards_widget.setLayout(cards_grid)
+        cards_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        v.addWidget(cards_widget)
         # 详情表格(替换原 QListWidget,带列排序)
         v.addWidget(QLabel("💡 点击表格行 → 在画布上高亮该孔洞:"))
         self.table = QTableWidget()
@@ -709,6 +725,7 @@ class Step8Analyze(QWidget):
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         # 关键:行选中信号 → 触发 pore_selected
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self.table.setMinimumHeight(200)  # 至少 7 行可见(26px/行)
         v.addWidget(self.table, 1)
 
     def _run(self):

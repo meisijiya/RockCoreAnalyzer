@@ -38,7 +38,7 @@ from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QAction, QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QMainWindow, QMenuBar, QMessageBox,
-    QPushButton, QSizePolicy, QSplitter, QStackedWidget, QStatusBar,
+    QPushButton, QSizePolicy,     QSplitter, QStackedWidget, QStatusBar, QScrollArea,
     QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -126,18 +126,17 @@ class ModuleWorkflowPage(QWidget):
         self.step_list.setCurrentRow(0)
         self.step_list.currentRowChanged.connect(self._on_step_changed)
         splitter.addWidget(self.step_list)
-        # 中间:画布 + 步骤面板
+        # 中间:画布 + 步骤面板(滚动包裹)
         center_splitter = QSplitter(Qt.Vertical)
         # 画布
         self.canvas = CanvasView()
         # 画布允许挤压,但优先扩展
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         center_splitter.addWidget(self.canvas)
-        # 步骤面板栈 - 修复:不再用 stretch=0(让画布无限制扩展导致步骤面板被挤没)
-        # 而是给 step_stack 明确 minimumHeight,并用 stretch=1 让它能扩展
+        # 步骤面板栈 - 用 QScrollArea 包裹,内容超出时可滚动
         self.step_stack = QStackedWidget()
         self.step_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.step_stack.setMinimumHeight(360)  # 表格+卡片+按钮的最小可视空间
+        self.step_stack.setMinimumHeight(0)  # 让 Stack 自由伸缩,由外层 ScrollArea 控最小
         self.step_stack.setStyleSheet(f"""
             QStackedWidget {{
                 background: {color('bg')};
@@ -150,12 +149,25 @@ class ModuleWorkflowPage(QWidget):
             self.step_stack.addWidget(panel)
             # 连接通用信号
             self._wire_panel_signals(panel, step)
-        center_splitter.addWidget(self.step_stack)
-        # 修复:两个 widget 都用 stretch=1,允许用户拖拽调整
-        # setSizes 初始分配 60:40 比例
+        # 滚动包裹 - 任何 Step 面板内容超出可视区都可滚动
+        self.step_scroll = QScrollArea()
+        self.step_scroll.setWidget(self.step_stack)
+        self.step_scroll.setWidgetResizable(True)
+        self.step_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.step_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.step_scroll.setMinimumHeight(440)  # 强制最小可视高度
+        self.step_scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: {color('bg')};
+                border-top: 1px solid {color('border')};
+            }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+        """)
+        center_splitter.addWidget(self.step_scroll)
+        # 50:50 比例 - 但 step_stack 现在是 ScrollArea,可安全挤压
         center_splitter.setStretchFactor(0, 1)
         center_splitter.setStretchFactor(1, 1)
-        center_splitter.setSizes([500, 400])
+        center_splitter.setSizes([420, 440])  # 加大 step_stack 初始值
         splitter.addWidget(center_splitter)
         # 右侧教学面板
         self.teaching = TeachingPanel()
