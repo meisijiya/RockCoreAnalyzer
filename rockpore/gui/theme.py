@@ -189,6 +189,90 @@ QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus, QPlainTe
     padding: 5px 9px;
 }}
 
+/* SpinBox 紧凑显示(不撑满整行)+ 上下箭头按钮 */
+QSpinBox, QDoubleSpinBox {{
+    min-width: 90px;
+    max-width: 130px;
+}}
+
+QSpinBox::up-button, QDoubleSpinBox::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
+    height: 14px;
+    border-left: 1px solid {PALETTE['border']};
+    border-bottom: 1px solid {PALETTE['border']};
+    background: {PALETTE['bg_subtle']};
+    border-top-right-radius: 5px;
+}}
+
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover {{
+    background: {PALETTE['primary_light']};
+}}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    height: 14px;
+    border-left: 1px solid {PALETTE['border']};
+    background: {PALETTE['bg_subtle']};
+    border-bottom-right-radius: 5px;
+}}
+
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+    background: {PALETTE['primary_light']};
+}}
+
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid {PALETTE['text_secondary']};
+}}
+
+QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {{
+    border-bottom-color: {PALETTE['primary']};
+}}
+
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {PALETTE['text_secondary']};
+}}
+
+QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {{
+    border-top-color: {PALETTE['primary']};
+}}
+
+/* 滑块样式 - 用于参数调节 */
+QSlider::groove:horizontal {{
+    height: 6px;
+    background: {PALETTE['bg_subtle']};
+    border: 1px solid {PALETTE['border']};
+    border-radius: 3px;
+}}
+
+QSlider::handle:horizontal {{
+    background: {PALETTE['primary']};
+    border: 2px solid {PALETTE['bg_panel']};
+    width: 18px;
+    margin: -7px 0;
+    border-radius: 10px;
+}}
+
+QSlider::handle:horizontal:hover {{
+    background: {PALETTE['primary_hover']};
+}}
+
+QSlider::sub-page:horizontal {{
+    background: {PALETTE['primary_light']};
+    border-radius: 3px;
+}}
+
 QLineEdit:read-only {{
     background: {PALETTE['bg_subtle']};
     color: {PALETTE['text_secondary']};

@@ -15,8 +15,9 @@ from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
     QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton,
-    QRadioButton, QScrollArea, QSizePolicy, QSpinBox, QTextEdit, QVBoxLayout,
-    QWidget, QButtonGroup,
+    QRadioButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QTextEdit,
+    QVBoxLayout, QWidget, QButtonGroup, QHeaderView, QTableWidget,
+    QTableWidgetItem, QAbstractItemView,
 )
 
 from .module_base import AnalysisModule, StepDefinition
@@ -162,6 +163,97 @@ class Step3Scale(QWidget):
 
 
 # ============= 步骤 4: 图像预处理 =============
+class _LabeledSlider(QWidget):
+    """标签 + 滑块 + 数值显示 三段式控件.
+    解决 QFormLayout 中 QDoubleSpinBox 显示异常(Windows 11 上拉成绿色长条).
+    """
+    valueChanged = pyqtSignal(float)
+
+    def __init__(self, label: str, minimum: float, maximum: float,
+                 value: float, step: float = 0.1, decimals: int = 2,
+                 unit: str = "", parent=None):
+        super().__init__(parent)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
+        # 标签
+        self._label = QLabel(label)
+        self._label.setMinimumWidth(60)
+        self._label.setStyleSheet("color: #1f2328; font-size: 13px;")
+        h.addWidget(self._label)
+        # 滑块(整数 0-1000 内部,映射到浮点值)
+        self._min = minimum
+        self._max = maximum
+        self._decimals = decimals
+        self._unit = unit
+        self._slider = QSlider(Qt.Horizontal)
+        self._slider.setRange(0, 1000)
+        self._slider.setValue(self._to_slider(value))
+        self._slider.setMinimumWidth(180)
+        self._slider.setTickPosition(QSlider.NoTicks)
+        h.addWidget(self._slider, 1)
+        # 数值显示
+        self._value_label = QLabel(self._format_value(value))
+        self._value_label.setMinimumWidth(80)
+        self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._value_label.setStyleSheet(
+            "color: #2c5fa3; font-weight: bold; "
+            "background: #e8f0fb; padding: 4px 10px; border-radius: 4px;"
+        )
+        h.addWidget(self._value_label)
+        # 增减按钮(精确微调)
+        self._minus_btn = QPushButton("−")
+        self._minus_btn.setFixedSize(28, 28)
+        self._minus_btn.setStyleSheet(
+            "QPushButton { background: #fafbfc; border: 1px solid #d0d7de; "
+            "border-radius: 4px; font-size: 16px; font-weight: bold; }"
+            "QPushButton:hover { background: #e8f0fb; }"
+        )
+        self._plus_btn = QPushButton("+")
+        self._plus_btn.setFixedSize(28, 28)
+        self._plus_btn.setStyleSheet(self._minus_btn.styleSheet())
+        h.addWidget(self._minus_btn)
+        h.addWidget(self._plus_btn)
+        # 信号
+        self._slider.valueChanged.connect(self._on_slider_changed)
+        self._minus_btn.clicked.connect(lambda: self._step_by(-step))
+        self._plus_btn.clicked.connect(lambda: self._step_by(step))
+
+    def _to_slider(self, value: float) -> int:
+        if self._max == self._min:
+            return 0
+        return int((value - self._min) / (self._max - self._min) * 1000)
+
+    def _from_slider(self, slider_val: int) -> float:
+        return self._min + slider_val / 1000.0 * (self._max - self._min)
+
+    def _format_value(self, value: float) -> str:
+        fmt = f"{{:.{self._decimals}f}}"
+        text = fmt.format(value)
+        if self._unit:
+            text += f" {self._unit}"
+        return text
+
+    def _on_slider_changed(self, slider_val: int):
+        value = self._from_slider(slider_val)
+        # 量化到 step
+        self._value_label.setText(self._format_value(value))
+        self.valueChanged.emit(value)
+
+    def _step_by(self, delta: float):
+        current = self._from_slider(self._slider.value())
+        new = current + delta
+        new = max(self._min, min(self._max, new))
+        self._slider.setValue(self._to_slider(new))
+
+    def value(self) -> float:
+        return self._from_slider(self._slider.value())
+
+    def setValue(self, v: float):
+        self._slider.setValue(self._to_slider(v))
+        self._value_label.setText(self._format_value(v))
+
+
 class Step4Preprocess(QWidget):
     preprocessed = pyqtSignal(np.ndarray)
     def __init__(self, ctx_getter, parent=None):
@@ -176,7 +268,7 @@ class Step4Preprocess(QWidget):
         sub = QLabel("调整图像以增强孔洞与基质的对比度")
         sub.setObjectName("pageSubtitle")
         v.addWidget(sub)
-        # I1: 重新设计 - 顶部 2 个预设按钮,中间细调表单,唯一「应用所有设置」按钮
+        # 预设按钮
         h = QHBoxLayout()
         auto_btn = QPushButton("⚡ 一键增强(推荐)")
         auto_btn.setObjectName("primaryButton")
@@ -188,55 +280,49 @@ class Step4Preprocess(QWidget):
         h.addWidget(reset_btn)
         h.addStretch(1)
         v.addLayout(h)
-        # 说明
+        # 使用说明
         info = QLabel("💡 用法:\n"
-                       "1. 在下方调整任意参数(亮度/对比度/Gamma/...)或勾选增强选项\n"
-                       "2. 点击底部「应用所有设置」一次性应用全部修改\n"
-                       "3. 多次点击「应用」会基于上次结果叠加(链式处理)\n"
+                       "1. 拖动滑块或在右侧按钮调节参数(数值实时显示)\n"
+                       "2. 勾选增强选项(锐化/底片/转灰度)\n"
+                       "3. 点击底部「应用所有设置」一次性应用全部修改\n"
                        "4. 不满意可点「重置为原图」回到原始图像")
         info.setStyleSheet("color: #57606a; font-size: 12px; padding: 8px; line-height: 1.5;")
         info.setWordWrap(True)
         v.addWidget(info)
-        # 细调面板
+        # 参数面板(使用 _LabeledSlider 解决 Windows 11 QSpinBox 显示异常)
         form_card = Card("tip")
-        form = QFormLayout()
-        # 通用设置
+        form = QVBoxLayout()
+        form.setSpacing(10)
+        # 自动色阶
         self.auto_levels_check = QCheckBox("启用自动色阶(推荐开启)")
         self.auto_levels_check.setChecked(True)
-        self.brightness = QDoubleSpinBox()
-        self.brightness.setRange(-100, 100)
-        self.brightness.setValue(0)
-        self.brightness.setSuffix("  (-100~100)")
-        self.contrast = QDoubleSpinBox()
-        self.contrast.setRange(0.1, 3.0)
-        self.contrast.setSingleStep(0.1)
-        self.contrast.setValue(1.0)
-        self.gamma = QDoubleSpinBox()
-        self.gamma.setRange(0.1, 5.0)
-        self.gamma.setSingleStep(0.1)
-        self.gamma.setValue(1.0)
-        self.blur = QSpinBox()
-        self.blur.setRange(0, 31)
-        self.blur.setValue(0)
-        self.blur.setSuffix(" px  (0=不模糊)")
+        form.addWidget(self.auto_levels_check)
+        # 4 个滑块控件
+        self.brightness = _LabeledSlider("亮度", -100, 100, 0, step=1, decimals=0, unit="")
+        self.contrast = _LabeledSlider("对比度", 0.1, 3.0, 1.0, step=0.1, decimals=2, unit="×")
+        self.gamma = _LabeledSlider("Gamma", 0.1, 5.0, 1.0, step=0.1, decimals=2, unit="")
+        self.blur = _LabeledSlider("模糊核", 0, 31, 0, step=1, decimals=0, unit="px")
+        form.addWidget(self.brightness)
+        form.addWidget(self.contrast)
+        form.addWidget(self.gamma)
+        form.addWidget(self.blur)
         # 增强选项
-        self.sharpen_check = QCheckBox("锐化 (USM)")
-        self.invert_check = QCheckBox("底片效果 (像素取反)")
-        self.gray_check = QCheckBox("转灰度")
-        # 唯一应用按钮
+        opts = QHBoxLayout()
+        opts.setSpacing(16)
+        self.sharpen_check = QCheckBox("🔪 锐化")
+        self.invert_check = QCheckBox("🎞 底片效果")
+        self.gray_check = QCheckBox("⚫ 转灰度")
+        opts.addWidget(self.sharpen_check)
+        opts.addWidget(self.invert_check)
+        opts.addWidget(self.gray_check)
+        opts.addStretch(1)
+        form.addLayout(opts)
+        # 应用按钮
         apply_btn = QPushButton("✅ 应用所有设置")
         apply_btn.setObjectName("primaryButton")
         apply_btn.setMinimumHeight(40)
         apply_btn.clicked.connect(self._apply_params)
-        form.addRow(self.auto_levels_check)
-        form.addRow("亮度:", self.brightness)
-        form.addRow("对比度:", self.contrast)
-        form.addRow("Gamma:", self.gamma)
-        form.addRow("模糊核:", self.blur)
-        form.addRow(self.sharpen_check)
-        form.addRow(self.invert_check)
-        form.addRow(self.gray_check)
-        form.addRow(apply_btn)
+        form.addWidget(apply_btn)
         form_card._layout.addLayout(form)
         v.addWidget(form_card)
         v.addStretch(1)
@@ -266,21 +352,22 @@ class Step4Preprocess(QWidget):
             ctx.pop("processed_image", None)
 
     def _apply_params(self):
-        """应用所有设置(亮度/对比度/Gamma/模糊/锐化/底片/灰度/自动色阶)."""
+        """应用所有设置."""
         img = self._get_image()
         if img is None:
             QMessageBox.warning(self, "提示", "请先打开图像")
             return
         from rockpore.core.preprocessing import preprocess, PreprocessParams
+        blur_int = int(round(self.blur.value()))
         params = PreprocessParams(
             brightness=self.brightness.value(),
             contrast=self.contrast.value(),
             gamma=self.gamma.value(),
-            blur_kernel=self.blur.value(),
+            blur_kernel=blur_int,
             sharpen=self.sharpen_check.isChecked(),
             invert=self.invert_check.isChecked(),
             to_gray=self.gray_check.isChecked(),
-            auto_levels=self.auto_levels_check.isChecked(),  # 修复:读 auto_levels_check
+            auto_levels=self.auto_levels_check.isChecked(),
         )
         out = preprocess(img, params)
         self._emit(out)
@@ -485,9 +572,13 @@ class Step6Edit(QWidget):
 # ============= 步骤 8: 孔洞分析 =============
 class Step8Analyze(QWidget):
     analyzed = pyqtSignal(object)  # PoreAnalysisResult
+    pore_selected = pyqtSignal(int)  # 选中孔洞的 id,-1=取消选中
+    show_all_changed = pyqtSignal(bool)  # 用户切换"显示所有"
+
     def __init__(self, ctx_getter, parent=None):
         super().__init__(parent)
         self.ctx = ctx_getter
+        self._pores_by_id: Dict[int, Any] = {}
         v = QVBoxLayout(self)
         v.setContentsMargins(20, 20, 20, 20)
         v.setSpacing(12)
@@ -497,13 +588,19 @@ class Step8Analyze(QWidget):
         sub = QLabel("计算面积、直径、面孔率等定量参数")
         sub.setObjectName("pageSubtitle")
         v.addWidget(sub)
-        # 按钮
+        # 按钮行:分析 + 显示所有/只显示选中
         h = QHBoxLayout()
         run_btn = QPushButton("▶ 自动分析")
         run_btn.setObjectName("primaryButton")
-        run_btn.setMinimumHeight(40)
+        run_btn.setMinimumHeight(36)
         run_btn.clicked.connect(self._run)
         h.addWidget(run_btn)
+        self.show_all_btn = QPushButton("👁 显示所有标注")
+        self.show_all_btn.setObjectName("ghostButton")
+        self.show_all_btn.setCheckable(True)
+        self.show_all_btn.setChecked(False)  # 默认不显示所有(避免遮挡)
+        self.show_all_btn.toggled.connect(self._on_show_all_toggled)
+        h.addWidget(self.show_all_btn)
         h.addStretch(1)
         v.addLayout(h)
         # 数据卡片
@@ -532,19 +629,37 @@ class Step8Analyze(QWidget):
             self._cards[key] = val
             cards_grid.addWidget(frame, r, c)
         v.addLayout(cards_grid)
-        # 详细列表
-        self.list_widget = QListWidget()
-        self.list_widget.setMaximumHeight(200)
-        v.addWidget(QLabel("孔洞详情:"))
-        v.addWidget(self.list_widget)
-        v.addStretch(1)
+        # 详情表格(替换原 QListWidget,带列排序)
+        v.addWidget(QLabel("💡 点击表格行 → 在画布上高亮该孔洞:"))
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels([
+            "ID", "直径 (mm)", "面积 (mm²)", "分类", "质心 (x,y)", "填充",
+        ])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        # 列宽自适应
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        # 关键:行选中信号 → 触发 pore_selected
+        self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        v.addWidget(self.table, 1)
+        v.addStretch(0)
 
     def _run(self):
         ctx = self.ctx()
-        if "mask" not in ctx or ctx["mask"] is None:
+        if ctx.get("mask") is None:
             QMessageBox.warning(self, "提示", "请先完成孔洞提取")
             return
-        if "scale" not in ctx:
+        if ctx.get("scale") is None:
             QMessageBox.warning(self, "提示", "请先设置标尺")
             return
         from rockpore.core.analysis import analyze_pores
@@ -557,16 +672,64 @@ class Step8Analyze(QWidget):
         self._cards["avg_diameter"].setText(f"{result.average_diameter_real:.2f} mm")
         self._cards["max_diameter"].setText(f"{result.max_diameter_real:.2f} mm")
         self._cards["min_diameter"].setText(f"{result.min_diameter_real:.2f} mm")
-        # 列表
-        self.list_widget.clear()
-        for p in result.pores[:30]:
-            item = QListWidgetItem(
-                f"#{p.id:3d} | {p.diameter_real:6.2f} mm | {p.area_real:7.2f} mm² | {p.size_class}"
-            )
-            self.list_widget.addItem(item)
-        if len(result.pores) > 30:
-            self.list_widget.addItem(f"... 共 {len(result.pores)} 个孔洞,显示前 30 个")
+        # 填表
+        self._fill_table(result)
+        # 默认清空画布上的孔洞标注(避免遮挡)
+        # 仅在用户点"显示所有"时才显示
+        self.pore_selected.emit(-1)  # 通知 page 清标注
         self.analyzed.emit(result)
+
+    def _fill_table(self, result):
+        """填充孔洞详情表格."""
+        self.table.setRowCount(len(result.pores))
+        self._pores_by_id = {p.id: p for p in result.pores}
+        for row, p in enumerate(result.pores):
+            # ID
+            id_item = QTableWidgetItem(str(p.id))
+            id_item.setData(Qt.UserRole, p.id)  # 用于查找
+            self.table.setItem(row, 0, id_item)
+            # 直径
+            self.table.setItem(row, 1, QTableWidgetItem(f"{p.diameter_real:.2f}"))
+            # 面积
+            self.table.setItem(row, 2, QTableWidgetItem(f"{p.area_real:.2f}"))
+            # 分类
+            self.table.setItem(row, 3, QTableWidgetItem(p.size_class))
+            # 质心
+            cx, cy = p.centroid
+            self.table.setItem(row, 4, QTableWidgetItem(f"({cx:.0f}, {cy:.0f})"))
+            # 填充
+            self.table.setItem(row, 5, QTableWidgetItem(p.filled_status.value))
+        # 默认按 ID 排序
+        self.table.sortItems(0, Qt.AscendingOrder)
+
+    def _on_table_selection_changed(self):
+        """用户点击表格行 → 触发 pore_selected 信号(主窗口画布高亮)."""
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            self.pore_selected.emit(-1)
+            return
+        row = selected[0].row()
+        id_item = self.table.item(row, 0)
+        if id_item is None:
+            self.pore_selected.emit(-1)
+            return
+        pore_id = id_item.data(Qt.UserRole)
+        if pore_id is None:
+            pore_id = int(id_item.text())
+        self.pore_selected.emit(int(pore_id))
+
+    def _on_show_all_toggled(self, checked: bool):
+        """切换是否显示所有孔洞标注."""
+        # 通过 analyzed 信号携带标志位 → page 处理
+        # 这里仅更新按钮文字
+        if checked:
+            self.show_all_btn.setText("🙈 隐藏所有标注")
+        else:
+            self.show_all_btn.setText("👁 显示所有标注")
+        # 通知 page(用 pore_selected(-2) 区分,-2=切换显隐状态)
+        # 简单方案:发个自定义信号
+        if hasattr(self, 'show_all_changed'):
+            self.show_all_changed.emit(checked)
 
 
 # ============= 步骤 9: 基础信息 =============

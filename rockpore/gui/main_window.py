@@ -172,9 +172,15 @@ class ModuleWorkflowPage(QWidget):
         # Step6 edited: 更新掩码
         if hasattr(panel, "edited"):
             panel.edited.connect(self._on_mask_updated)
-        # Step8 analyzed: 更新标注 + 跳到第 9 步
+        # Step8 analyzed: 更新数据卡片(默认不画所有标注)
         if hasattr(panel, "analyzed"):
             panel.analyzed.connect(self._on_analysis_done)
+        # Step8 pore_selected: 用户点击表格行 → 画布高亮该孔洞
+        if hasattr(panel, "pore_selected"):
+            panel.pore_selected.connect(self._on_pore_selected)
+        # Step8 show_all_changed: 用户切换"显示所有"
+        if hasattr(panel, "show_all_changed"):
+            panel.show_all_changed.connect(self._on_show_all_toggled)
         # Step9 saved: 跳到第 10 步
         if hasattr(panel, "saved"):
             panel.saved.connect(self._on_info_saved)
@@ -211,18 +217,50 @@ class ModuleWorkflowPage(QWidget):
         self.context["mask_dirty"] = True
 
     def _on_analysis_done(self, result):
-        """步骤 8 完成: 标注孔洞 + 跳到第 9 步."""
+        """步骤 8 完成: 默认不显示所有标注(避免遮挡图像).
+        用户可在右侧"显示所有标注"按钮切换,或点击表格行单独高亮.
+        """
         if result is None:
             return
+        # 默认不显示边界框
+        self.canvas.set_annotations([])
+        self._show_all_annotations = False
+
+    def _on_pore_selected(self, pore_id: int):
+        """用户点击孔洞详情表某行 → 画布高亮该孔洞."""
         from .canvas_view import Annotation
-        annotations = [
-            Annotation(
-                id=p.id, bbox=p.bbox, label=f"{p.diameter_real:.1f}mm",
-                color=(0, 200, 100),
-            )
-            for p in result.pores
-        ]
-        self.canvas.set_annotations(annotations)
+        result = self.context.get("analysis_result")
+        if result is None or pore_id < 0:
+            self.canvas.set_annotations([])
+            return
+        # 只显示选中的那一个
+        for p in result.pores:
+            if p.id == pore_id:
+                self.canvas.set_annotations([
+                    Annotation(
+                        id=p.id, bbox=p.bbox, label=f"{p.diameter_real:.1f}mm",
+                        color=(0, 200, 100),
+                    )
+                ])
+                return
+
+    def _on_show_all_toggled(self, show_all: bool):
+        """用户切换"显示所有标注"按钮 → 全部显示或全部隐藏."""
+        from .canvas_view import Annotation
+        result = self.context.get("analysis_result")
+        if result is None:
+            return
+        if show_all:
+            annotations = [
+                Annotation(
+                    id=p.id, bbox=p.bbox, label=f"{p.diameter_real:.1f}mm",
+                    color=(0, 200, 100),
+                )
+                for p in result.pores
+            ]
+            self.canvas.set_annotations(annotations)
+        else:
+            self.canvas.set_annotations([])
 
     def _on_info_saved(self, data: dict):
         """步骤 9 完成: 跳到第 10 步(报告)."""
@@ -516,16 +554,39 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"✅ 报告已保存: {path}")
 
     def _redo_current(self):
+        """重置当前模块的所有分析结果,回到"刚加载图像"状态.
+        用户重新开始分析流程;不删除图像和标尺,只清空 mask/preprocess/分析结果/标注.
+        """
         page = self.tabs.currentWidget()
-        if page.context.get("image") is not None and page.context.get("scale") is not None:
-            from rockpore.core.accuracy import detect_pores_robust
-            mask, result = detect_pores_robust(
-                page.context["image"], page.context["scale"]
-            )
-            page.context["mask"] = mask
-            page.context["analysis_result"] = result
-            page.canvas.set_mask(mask)
-            self.status_label.setText("🔄 已重新分析")
+        if page is None:
+            return
+        if page.context.get("image") is None:
+            QMessageBox.information(self, "提示", "请先打开图像")
+            return
+        # 弹确认,避免误操作丢失分析结果
+        ret = QMessageBox.question(
+            self, "确认重置",
+            f"将清空「{self.modules[self.current_module_idx].name}」模块的:\n"
+            "• 图像预处理结果\n• 孔洞掩码(含手动编辑)\n• 分析结果\n• 撤销栈\n\n"
+            "图像和标尺会保留。是否继续?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes:
+            return
+        # 关键修复:之前 page.context.get("image") 检查因为 page 是 ModuleWorkflowPage 实例
+        # 但 _redo_current 是 MainWindow 的方法,self.tabs.currentWidget() 返回当前页,
+        # 该页的 context 包含 image. 之前逻辑应该工作,但可能 page 不是 self.tabs.currentWidget()?
+        page.context["mask"] = None
+        page.context["mask_dirty"] = False
+        page.context["processed_image"] = None
+        page.context["analysis_result"] = None
+        page.context["_edit_undo_stack"] = []
+        page.canvas.set_annotations([])
+        page.canvas.set_image(page.context["image"])
+        # 跳到第 1 步重新开始
+        page.goto_step(0)
+        self.status_label.setText("🔄 已重置分析流程,可重新开始")
 
     # -------------- 视图 --------------
     def _on_tab_changed(self, idx: int):
