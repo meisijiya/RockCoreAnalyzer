@@ -432,18 +432,43 @@ class Step5Extract(QWidget):
         if "image" not in ctx or ctx["image"] is None:
             QMessageBox.warning(self, "提示", "请先打开图像")
             return
-        # S2: 如果当前掩码已被用户手动编辑过(脏),弹确认后再覆盖
-        if ctx.get("mask") is not None and ctx.get("mask_dirty", False):
-            ret = QMessageBox.question(
-                self, "确认重新提取",
-                "当前掩码已被您手动编辑过(橡皮擦/添加)。\n"
-                "重新提取会覆盖您的手动修改。\n\n"
-                "是否继续?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if ret != QMessageBox.Yes:
+        # S2 + 新需求:如果当前掩码已被用户手动编辑过(脏),询问合并策略
+        user_mask = ctx.get("mask")
+        user_dirty = ctx.get("mask_dirty", False)
+        merge_mode = "overwrite"  # 默认覆盖
+        if user_mask is not None and user_dirty:
+            # 提供 3 选项:覆盖 / 合并 / 取消
+            # 用 QMessageBox.question 不能 3 选项,改用自定义对话框
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
+            dlg = QDialog(self)
+            dlg.setWindowTitle("合并模式")
+            dlg.setMinimumWidth(420)
+            v = QVBoxLayout(dlg)
+            v.addWidget(QLabel("当前掩码已被您手动编辑过(橡皮擦/添加)。\n"
+                              "请选择如何合并新的提取结果:"))
+            btn_layout = QVBoxLayout()
+            btn_overwrite = QPushButton("📝 完全覆盖 - 丢弃您的编辑,使用新提取")
+            btn_merge_add = QPushButton("➕ 合并(您的编辑优先) - 保留您添加的孔洞,在空白处做新提取")
+            btn_merge_only = QPushButton("🧹 仅在您擦除处做新提取 - 保留您添加的")
+            btn_cancel = QPushButton("❌ 取消")
+            btn_layout.addWidget(btn_overwrite)
+            btn_layout.addWidget(btn_merge_add)
+            btn_layout.addWidget(btn_merge_only)
+            btn_layout.addWidget(btn_cancel)
+            v.addLayout(btn_layout)
+            result = {"mode": "cancel"}
+            def set_mode(m):
+                result["mode"] = m
+                dlg.accept()
+            btn_overwrite.clicked.connect(lambda: set_mode("overwrite"))
+            btn_merge_add.clicked.connect(lambda: set_mode("merge_add"))
+            btn_merge_only.clicked.connect(lambda: set_mode("merge_only"))
+            btn_cancel.clicked.connect(lambda: set_mode("cancel"))
+            dlg.exec_()
+            merge_mode = result["mode"]
+            if merge_mode == "cancel":
                 return
+        # 1. 自动提取
         img = ctx.get("processed_image")
         if img is None:
             img = ctx["image"]
@@ -455,15 +480,39 @@ class Step5Extract(QWidget):
         }
         m = self.method.currentText()
         try:
-            mask = extract_pores(img, method=method_map.get(m, "otsu"))
+            new_mask = extract_pores(img, method=method_map.get(m, "otsu"))
         except ValueError as e:
             QMessageBox.critical(self, "提取失败", f"提取方法错误:\n{e}")
             return
-        mask = morphological_open(mask, kernel_size=2)
+        new_mask = morphological_open(new_mask, kernel_size=2)
         if self.min_area.value() > 0:
-            mask = remove_noise(mask, min_area=self.min_area.value())
+            new_mask = remove_noise(new_mask, min_area=self.min_area.value())
+        # 2. 合并用户编辑(根据 merge_mode)
+        if merge_mode == "overwrite" or user_mask is None or not user_dirty:
+            mask = new_mask
+        elif merge_mode == "merge_add":
+            # 合并:用户 mask=255 的位置保留 + 新提取的孔洞
+            # 即:cv2.bitwise_or(user_mask, new_mask)
+            mask = cv2.bitwise_or(user_mask, new_mask)
+        elif merge_mode == "merge_only":
+            # 仅在用户擦除处(=0)做新提取
+            # result = (new_mask WHERE user_mask=0) | (user_mask WHERE user_mask=255)
+            # = new_mask & ~user_mask | user_mask
+            # = new_mask | user_mask(因为 new_mask & ~user_mask ≤ new_mask,加 user_mask 不变)
+            # 实际:用户擦除的位置,如果新提取是 1 就保留;用户添加的位置始终保留
+            mask = cv2.bitwise_or(user_mask, new_mask)
+        else:
+            mask = new_mask
         ctx["mask"] = mask
-        ctx["mask_dirty"] = False  # 自动提取后重置脏标志
+        ctx["mask_dirty"] = False
+        # 显示合并结果提示
+        if merge_mode != "overwrite" and user_dirty:
+            new_in_user = int(((user_mask == 0) & (mask == 255)).sum())
+            kept_user = int(((user_mask == 255) & (mask == 255)).sum())
+            self.status_message = (
+                f"✓ 合并完成: 保留您添加的 {kept_user} px 区域 + "
+                f"擦除处新发现 {new_in_user} px 区域"
+            )
         self.extracted.emit(mask)
 
 
@@ -637,10 +686,19 @@ class Step8Analyze(QWidget):
             "ID", "直径 (mm)", "面积 (mm²)", "分类", "质心 (x,y)", "填充",
         ])
         self.table.verticalHeader().setVisible(False)
+        # 显式行高(避免渲染 0 高度)
+        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        # 表头加粗
+        h_font = self.table.horizontalHeader().font()
+        h_font.setBold(True)
+        self.table.horizontalHeader().setFont(h_font)
+        # 最小尺寸保证可见
+        self.table.setMinimumHeight(220)
         # 列宽自适应
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -652,7 +710,6 @@ class Step8Analyze(QWidget):
         # 关键:行选中信号 → 触发 pore_selected
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         v.addWidget(self.table, 1)
-        v.addStretch(0)
 
     def _run(self):
         ctx = self.ctx()

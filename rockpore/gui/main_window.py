@@ -130,9 +130,14 @@ class ModuleWorkflowPage(QWidget):
         center_splitter = QSplitter(Qt.Vertical)
         # 画布
         self.canvas = CanvasView()
+        # 画布允许挤压,但优先扩展
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         center_splitter.addWidget(self.canvas)
-        # 步骤面板栈
+        # 步骤面板栈 - 修复:不再用 stretch=0(让画布无限制扩展导致步骤面板被挤没)
+        # 而是给 step_stack 明确 minimumHeight,并用 stretch=1 让它能扩展
         self.step_stack = QStackedWidget()
+        self.step_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.step_stack.setMinimumHeight(360)  # 表格+卡片+按钮的最小可视空间
         self.step_stack.setStyleSheet(f"""
             QStackedWidget {{
                 background: {color('bg')};
@@ -146,7 +151,11 @@ class ModuleWorkflowPage(QWidget):
             # 连接通用信号
             self._wire_panel_signals(panel, step)
         center_splitter.addWidget(self.step_stack)
-        center_splitter.setSizes([500, 300])
+        # 修复:两个 widget 都用 stretch=1,允许用户拖拽调整
+        # setSizes 初始分配 60:40 比例
+        center_splitter.setStretchFactor(0, 1)
+        center_splitter.setStretchFactor(1, 1)
+        center_splitter.setSizes([500, 400])
         splitter.addWidget(center_splitter)
         # 右侧教学面板
         self.teaching = TeachingPanel()
