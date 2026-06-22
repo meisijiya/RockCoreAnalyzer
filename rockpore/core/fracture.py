@@ -79,20 +79,41 @@ def classify_fracture_width(width_mm: float) -> str:
 class FractureParams:
     """裂缝检测参数.
     Attributes:
-        canny_low: Canny 低阈值
-        canny_high: Canny 高阈值
-        hough_threshold: HoughLinesP 累加阈值
+        method: 检测方法 ("hough" 或 "adaptive")
+        canny_low: Canny 低阈值 (Hough 方法)
+        canny_high: Canny 高阈值 (Hough 方法)
+        hough_threshold: HoughLinesP 累加阈值 (Hough 方法)
         min_line_length_px: 最小线长(像素)
         max_line_gap_px: 最大线间断距(像素)
         dilation_kernel_px: 线段→区域膨胀核(像素),用于将线段转为面积
+        # 自适应方法专属参数 (适合真实岩石图,纹理复杂)
+        blur_kernel: 高斯模糊核大小 (奇数, 推荐 5-9)
+        adaptive_block: 自适应阈值邻域大小 (奇数, 推荐 15-25)
+        adaptive_C: 自适应阈值常数 (推荐 8-12)
+        morph_close: 闭运算核大小 (连接相近裂缝, 推荐 5-7)
+        morph_open: 开运算核大小 (去噪, 推荐 2-3)
+        min_aspect_ratio: 最小长宽比 (线状过滤, 推荐 2.0-2.5)
+        min_area_for_candidate: 候选最小面积(像素),排除过小区域
+        max_area_ratio: 单个候选占图像最大比例(排除覆盖全图的假阳性)
         min_skeleton_length_px: 最小骨架长度(像素)
     """
+    method: str = "hough"  # "hough" | "adaptive" — 默认 hough 适合合成图
+    # Hough 参数
     canny_low: int = 90
     canny_high: int = 270
     hough_threshold: int = 25
     min_line_length_px: int = 20
     max_line_gap_px: int = 15
     dilation_kernel_px: int = 3
+    # 自适应参数(推荐默认 — 对真实岩石图鲁棒)
+    blur_kernel: int = 7
+    adaptive_block: int = 21
+    adaptive_C: int = 10
+    morph_close: int = 5
+    morph_open: int = 2
+    min_aspect_ratio: float = 2.0
+    min_area_for_candidate: int = 30
+    max_area_ratio: float = 0.30
     min_skeleton_length_px: int = 15
 
 
@@ -100,25 +121,40 @@ def detect_fracture_mask(
     image: np.ndarray,
     params: FractureParams = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """检测裂缝区域,返回 (裂缝 mask, 边缘图, 原始线段列表).
+    """检测裂缝区域,返回 (裂缝 mask, 边缘图, 线段/候选列表).
+
+    支持两种算法:
+    - "hough" (传统): Canny 边缘 + HoughLinesP 概率霍夫变换
+       适合裂缝边缘清晰、对比度高的图像(合成图、岩心薄片)
+    - "adaptive" (推荐): 高斯模糊 + 自适应阈值 + 形态学 + 长宽比筛选
+       适合真实岩石图(背景纹理多、对比度低),鲁棒性更好
 
     Args:
         image: BGR 或灰度图像
-        params: 检测参数
+        params: 检测参数 (FractureParams.method 控制算法)
     Returns:
-        (mask, edges, line_segments)
+        (mask, edges, segments)
         mask: 二值裂缝掩码(0/255)
-        edges: Canny 边缘图
-        line_segments: HoughLinesP 线段 np.ndarray (N, 1, 4) np.int32 格式;若无返回空数组
+        edges: 中间边缘/梯度图
+        segments: HoughLinesP 线段 (hough) 或空 (adaptive)
     """
     if params is None:
         params = FractureParams()
-    # 灰度化
+    if params.method == "adaptive":
+        return _detect_fracture_adaptive(image, params)
+    return _detect_fracture_hough(image, params)
+
+
+def _detect_fracture_hough(
+    image: np.ndarray,
+    params: FractureParams,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """HoughLinesP 算法(对比度高的图像适用)."""
     if image.ndim == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image
-    # CLAHE 增强对比度(裂缝通常对比度低)
+    # CLAHE 增强对比度
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray_eq = clahe.apply(gray)
     # 高斯降噪
@@ -136,13 +172,84 @@ def detect_fracture_mask(
     )
     if line_segments is None:
         return np.zeros_like(gray), edges, np.array([], dtype=np.int32).reshape(0, 1, 4)
-    # 将线段画在 mask 上(线宽=dilation_kernel_px)
     mask = np.zeros_like(gray)
     ksize = max(1, params.dilation_kernel_px)
     for seg in line_segments:
         x1, y1, x2, y2 = seg[0]
         cv2.line(mask, (x1, y1), (x2, y2), 255, ksize, cv2.LINE_AA)
     return mask, edges, line_segments
+
+
+def _detect_fracture_adaptive(
+    image: np.ndarray,
+    params: FractureParams,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """自适应阈值 + 形态学 + 候选筛选算法.
+
+    适合真实岩石图(背景纹理复杂、对比度低):
+    1. 高斯模糊消除纹理
+    2. 自适应阈值找暗色(裂缝通常比周围暗)
+    3. 形态学闭运算连接相近裂缝
+    4. 形态学开运算去噪
+    5. 候选筛选: 长宽比≥阈值 + 长度≥阈值 + 排除超大区域
+    """
+    if image.ndim == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+    h, w = gray.shape
+    # 1. 高斯模糊
+    ksize = max(3, params.blur_kernel | 1)  # 保证奇数
+    blurred = cv2.GaussianBlur(gray, (ksize, ksize), 0)
+    # 2. 自适应阈值(暗色=前景)
+    block = max(3, params.adaptive_block | 1)
+    adapt = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, block, params.adaptive_C,
+    )
+    # 3. 闭运算连接相近裂缝
+    if params.morph_close > 0:
+        k_close = max(1, params.morph_close | 1)
+        adapt = cv2.morphologyEx(adapt, cv2.MORPH_CLOSE,
+                                  cv2.getStructuringElement(cv2.MORPH_RECT, (k_close, k_close)))
+    # 4. 开运算去噪
+    if params.morph_open > 0:
+        k_open = max(1, params.morph_open)
+        adapt = cv2.morphologyEx(adapt, cv2.MORPH_OPEN,
+                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open)))
+    # 5. 候选筛选
+    mask = _filter_fracture_candidates(adapt, params, image_area=w * h)
+    # 构造 edges (用 mask 作为可视化)
+    edges = adapt
+    return mask, edges, np.array([], dtype=np.int32).reshape(0, 1, 4)
+
+
+def _filter_fracture_candidates(
+    mask: np.ndarray,
+    params: FractureParams,
+    image_area: int,
+) -> np.ndarray:
+    """从二值图中筛选裂缝候选(长宽比≥阈值 + 长度≥阈值 + 排除超大区域)."""
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if n <= 1:
+        return np.zeros_like(mask)
+    out = np.zeros_like(mask)
+    for i in range(1, n):
+        x, y, ww, hh, area = stats[i]
+        if area < params.min_area_for_candidate:
+            continue
+        length = max(ww, hh)
+        width = min(ww, hh)
+        aspect = length / max(width, 1)
+        if aspect < params.min_aspect_ratio:
+            continue
+        if length < 15:  # 最小长度兜底
+            continue
+        # 排除覆盖超大区域(>30% 图像)的候选(假阳性,通常是图像背景)
+        if area / image_area > params.max_area_ratio:
+            continue
+        out[labels == i] = 255
+    return out
 
 
 def _merge_close_segments(mask: np.ndarray, kernel_size: int = 3) -> np.ndarray:

@@ -127,33 +127,34 @@ def detect_fractures_robust(
 ) -> Tuple[np.ndarray, np.ndarray, FractureAnalysisResult]:
     """鲁棒的裂缝检测流水线.
 
-    1. CLAHE 增强 (由 detect_fracture_mask 内部完成)
-    2. Canny 边缘
-    3. HoughLinesP 线段检测
-    4. 线段 → 区域(dilation)
-    5. 形态学闭运算连接相近线段
-    6. 开运算去除小毛刺(提升 IoU)
-    7. 去除过短区域
+    1. 根据 params.method 选择算法:
+       - "hough": CLAHE + Canny + HoughLinesP
+       - "adaptive": 高斯模糊 + 自适应阈值 + 形态学 + 候选筛选(推荐)
+    2. 形态学闭运算连接断裂(对 hough 方法)
+    3. 开运算去小毛刺
+    4. 去除过短区域
     """
     mask, edges, _ = detect_fracture_mask(image, params)
-    # 形态学闭运算连接断裂
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
-                             cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
-    # 开运算去小毛刺(提升 IoU,减少假阳性像素)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
-                             cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
-    # 去除过小区域
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    if n > 1:
-        cleaned = np.zeros_like(mask)
-        for i in range(1, n):
-            area = stats[i, cv2.CC_STAT_AREA]
-            x, y, w, h = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], \
-                         stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
-            length = float(np.sqrt(w * w + h * h))
-            if length >= 15 and area >= 5:
-                cleaned[labels == i] = 255
-        mask = cleaned
+    # 对 hough 方法做后处理;adaptive 已内置形态学
+    if params is None or params.method == "hough":
+        # 形态学闭运算连接断裂
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                                 cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+        # 开运算去小毛刺
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                                 cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)))
+        # 去除过小区域
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if n > 1:
+            cleaned = np.zeros_like(mask)
+            for i in range(1, n):
+                area = stats[i, cv2.CC_STAT_AREA]
+                x, y, w, h = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], \
+                             stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+                length = float(np.sqrt(w * w + h * h))
+                if length >= 15 and area >= 5:
+                    cleaned[labels == i] = 255
+            mask = cleaned
     result = analyze_fractures(mask, scale)
     return mask, edges, result
 

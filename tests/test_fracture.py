@@ -299,3 +299,88 @@ class TestFractureReportFields:
         # 大缝、中缝、小缝之和应等于裂缝总数
         total = sum(result.width_distribution.values())
         assert total == result.fracture_count
+
+
+# ============= 真实岩石图测试 =============
+class TestRealRockImage:
+    """测试真实岩石图(用户提供的 裂缝样.jpg).
+
+    HoughLinesP 在纹理复杂图像上失效,adaptive 算法应能识别主裂缝.
+    """
+
+    @pytest.fixture
+    def real_image_path(self):
+        from pathlib import Path
+        project_root = Path(__file__).parent.parent
+        path = project_root / "裂缝样.jpg"
+        if not path.exists():
+            # 跳过真实图测试(开发环境可能没有)
+            pytest.skip(f"真实裂绊图不存在: {path}")
+        return str(path)
+
+    def test_hough_fails_on_real_image(self, real_image_path):
+        """Hough 算法在真实裂绊图上会产生大量假阳性(预期失败)."""
+        from rockpore.core.io_utils import imread_unicode
+        img = imread_unicode(real_image_path)
+        params = FractureParams(method="hough")
+        mask, _, lines = detect_fracture_mask(img, params)
+        # Hough 在真实图上覆盖 >50%(假阳性)
+        coverage = (mask > 0).mean()
+        assert coverage > 0.50, "Hough 在真实图上理应失败"
+
+    def test_adaptive_works_on_real_image(self, real_image_path):
+        """Adaptive 算法应能识别真实裂绊图的主裂绊."""
+        from rockpore.core.io_utils import imread_unicode
+        img = imread_unicode(real_image_path)
+        params = FractureParams(method="adaptive")
+        mask, _, _ = detect_fracture_mask(img, params)
+        result = analyze_fractures(mask, scale_from_dpi(96))
+        # Adaptive 应识别 ≥ 2 条裂缝(包括主裂缝)
+        assert result.fracture_count >= 2, \
+            f"adaptive 只识别 {result.fracture_count} 条裂缝, 应至少 2 条"
+        # 覆盖比例应 < 50%(避免覆盖全图)
+        coverage = (mask > 0).mean()
+        assert coverage < 0.50, f"adaptive 覆盖率 {coverage*100:.1f}% 过高"
+
+    def test_adaptive_finds_main_fracture(self, real_image_path):
+        """Adaptive 算法应识别中央垂直裂绊(L≥10mm, 倾角接近垂直)."""
+        from rockpore.core.io_utils import imread_unicode
+        img = imread_unicode(real_image_path)
+        params = FractureParams(method="adaptive")
+        mask, _, _ = detect_fracture_mask(img, params)
+        result = analyze_fractures(mask, scale_from_dpi(96))
+        # 找主裂绊(长度最大的)
+        main = max(result.fractures, key=lambda f: f.length_real)
+        # 主裂绊应 ≥ 10mm 长
+        assert main.length_real >= 10.0, \
+            f"主裂绊长度 {main.length_real:.1f}mm 过短"
+
+
+# ============= 算法对比测试 =============
+class TestAlgorithmComparison:
+    """对比 Hough 与 Adaptive 算法的差异."""
+
+    def test_both_methods_return_same_interface(self):
+        """两种方法返回相同的 (mask, edges, segments) 三元组."""
+        fractures, image, gt_mask = make_default_synthetic_fracture()
+        hough_mask, hough_edges, hough_segs = detect_fracture_mask(image, FractureParams(method="hough"))
+        adapt_mask, adapt_edges, adapt_segs = detect_fracture_mask(image, FractureParams(method="adaptive"))
+        # 类型相同
+        assert isinstance(hough_mask, np.ndarray) and isinstance(adapt_mask, np.ndarray)
+        assert isinstance(hough_edges, np.ndarray) and isinstance(adapt_edges, np.ndarray)
+        # shape 相同
+        assert hough_mask.shape == adapt_mask.shape
+        assert hough_edges.shape == adapt_edges.shape
+
+    def test_adaptive_candidates_have_aspect_ratio(self):
+        """Adaptive 算法候选应满足长宽比约束."""
+        fractures, image, gt_mask = make_default_synthetic_fracture()
+        params = FractureParams(method="adaptive", min_aspect_ratio=2.0)
+        mask, _, _ = detect_fracture_mask(image, params)
+        n, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        if n <= 1:
+            pytest.skip("无候选")
+        for i in range(1, n):
+            ww, hh = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+            aspect = max(ww, hh) / max(min(ww, hh), 1)
+            assert aspect >= 2.0, f"候选 #{i} 长宽比 {aspect:.1f} < 2.0"

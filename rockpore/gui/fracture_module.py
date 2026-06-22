@@ -92,7 +92,7 @@ class Step4FracturePreprocess(QWidget):
         self.preprocessed.emit(processed)
 
 
-# ============= 步骤 5: 裂缝提取(HoughLinesP)=============
+# ============= 步骤 5: 裂缝提取(支持 Hough/Adaptive 两种算法)=============
 class Step5FractureExtract(QWidget):
     extracted = pyqtSignal(np.ndarray)
 
@@ -105,14 +105,21 @@ class Step5FractureExtract(QWidget):
         title = QLabel("📏  裂缝提取")
         title.setObjectName("pageTitle")
         v.addWidget(title)
-        sub = QLabel("使用 HoughLinesP 检测线性暗色区域")
+        sub = QLabel("检测线性暗色区域(支持 Hough 变换与自适应阈值两种算法)")
         sub.setObjectName("pageSubtitle")
         v.addWidget(sub)
-        # 参数面板
+        # 算法选择
         card = Card("tip")
         cv_layout = card._layout
         form = QFormLayout()
-        # Canny 阈值
+        self.method = QComboBox()
+        self.method.addItems([
+            "adaptive(自适应阈值) ★推荐 — 真实岩石图",
+            "hough(HoughLinesP) — 边缘清晰的图像",
+        ])
+        self.method.currentIndexChanged.connect(self._on_method_changed)
+        form.addRow("检测算法:", self.method)
+        # Hough 参数
         self.canny_low = QSpinBox()
         self.canny_low.setRange(10, 200)
         self.canny_low.setValue(90)
@@ -138,6 +145,33 @@ class Step5FractureExtract(QWidget):
         self.dilation.setValue(3)
         self.dilation.setSuffix(" px (线段粗细)")
         form.addRow(self.dilation)
+        # 自适应参数
+        self.blur_kernel = QSpinBox()
+        self.blur_kernel.setRange(3, 15)
+        self.blur_kernel.setValue(7)
+        self.blur_kernel.setSuffix(" px (高斯模糊)")
+        form.addRow(self.blur_kernel)
+        self.adaptive_block = QSpinBox()
+        self.adaptive_block.setRange(5, 51)
+        self.adaptive_block.setValue(21)
+        self.adaptive_block.setSingleStep(2)
+        self.adaptive_block.setSuffix(" px (邻域大小)")
+        form.addRow(self.adaptive_block)
+        self.adaptive_C = QSpinBox()
+        self.adaptive_C.setRange(0, 30)
+        self.adaptive_C.setValue(10)
+        self.adaptive_C.setSuffix(" (常数 C)")
+        form.addRow(self.adaptive_C)
+        self.morph_close = QSpinBox()
+        self.morph_close.setRange(0, 15)
+        self.morph_close.setValue(5)
+        self.morph_close.setSuffix(" px (闭运算)")
+        form.addRow(self.morph_close)
+        self.min_aspect = QSpinBox()
+        self.min_aspect.setRange(1, 10)
+        self.min_aspect.setValue(2)
+        self.min_aspect.setSuffix(" :1 (长宽比)")
+        form.addRow(self.min_aspect)
         # 提取按钮
         extract_btn = QPushButton("🔍 自动提取裂缝")
         extract_btn.setObjectName("primaryButton")
@@ -147,16 +181,37 @@ class Step5FractureExtract(QWidget):
         cv_layout.addLayout(form)
         v.addWidget(card)
         info = QLabel(
+            "💡 算法选择建议:\n"
+            "• adaptive(推荐): 高斯模糊 + 自适应阈值 + 形态学 + 长宽比筛选\n"
+            "  — 适合真实岩石图(纹理多、对比度低),鲁棒性更好\n"
+            "• hough: Canny 边缘 + HoughLinesP 概率霍夫变换\n"
+            "  — 适合边缘清晰的图像(合成图、岩心薄片)\n\n"
             "💡 参数说明:\n"
-            "• Canny 阈值 ↑ = 更严格的边缘(降低假阳性,但可能漏检)\n"
-            "• Hough 累加 ↓ = 更多线段候选(可能引入噪点)\n"
-            "• 最小线长 ↑ = 仅保留长裂缝(过滤短噪点)\n"
             "• 提取会覆盖之前的结果(包括二次编辑)"
         )
         info.setWordWrap(True)
         info.setStyleSheet("color: #57606a; font-size: 12px; padding: 8px;")
         v.addWidget(info)
         v.addStretch(1)
+        # 默认显示 adaptive 参数
+        self._on_method_changed(0)
+
+    def _on_method_changed(self, idx):
+        """根据所选算法显示/隐藏对应参数."""
+        is_hough = idx == 1
+        # Hough 参数
+        self.canny_low.setVisible(is_hough)
+        self.hough_threshold.setVisible(is_hough)
+        self.min_length.setVisible(is_hough)
+        self.max_gap.setVisible(is_hough)
+        self.dilation.setVisible(is_hough)
+        # Adaptive 参数
+        is_adapt = idx == 0
+        self.blur_kernel.setVisible(is_adapt)
+        self.adaptive_block.setVisible(is_adapt)
+        self.adaptive_C.setVisible(is_adapt)
+        self.morph_close.setVisible(is_adapt)
+        self.min_aspect.setVisible(is_adapt)
 
     def _extract(self):
         ctx = self.ctx()
@@ -164,36 +219,45 @@ class Step5FractureExtract(QWidget):
             QMessageBox.warning(self, "提示", "请先打开图像")
             return
         from rockpore.core.fracture import FractureParams, detect_fracture_mask
+        from rockpore.core.fracture_accuracy import detect_fractures_robust
         img = ctx.get("processed_image")
         if img is None:
             img = ctx["image"]
-        params = FractureParams(
-            canny_low=self.canny_low.value(),
-            canny_high=self.canny_low.value() * 3,
-            hough_threshold=self.hough_threshold.value(),
-            min_line_length_px=self.min_length.value(),
-            max_line_gap_px=self.max_gap.value(),
-            dilation_kernel_px=self.dilation.value(),
-        )
+        is_hough = self.method.currentIndex() == 1
+        if is_hough:
+            params = FractureParams(
+                method="hough",
+                canny_low=self.canny_low.value(),
+                canny_high=self.canny_low.value() * 3,
+                hough_threshold=self.hough_threshold.value(),
+                min_line_length_px=self.min_length.value(),
+                max_line_gap_px=self.max_gap.value(),
+                dilation_kernel_px=self.dilation.value(),
+            )
+        else:
+            params = FractureParams(
+                method="adaptive",
+                blur_kernel=self.blur_kernel.value(),
+                adaptive_block=self.adaptive_block.value(),
+                adaptive_C=self.adaptive_C.value(),
+                morph_close=self.morph_close.value(),
+                min_aspect_ratio=float(self.min_aspect.value()),
+            )
         mask, _, _ = detect_fracture_mask(img, params)
-        # 形态学闭运算连接相近线段
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
-                                 cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
-        # 去除过小区域
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-        if n > 1:
-            cleaned = np.zeros_like(mask)
-            for i in range(1, n):
-                area = stats[i, cv2.CC_STAT_AREA]
-                x, y, w, h = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], \
-                             stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
-                length = float(np.sqrt(w * w + h * h))
-                if length >= 15 and area >= 5:
-                    cleaned[labels == i] = 255
-            mask = cleaned
         # 覆盖之前的 mask(包括二次编辑)
         ctx["mask"] = mask
         ctx["mask_dirty"] = False
+        # 提示检测结果
+        n_px = int((mask > 0).sum())
+        n, _, _, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        n_candidate = max(0, n - 1)
+        QMessageBox.information(
+            self, "提取完成",
+            f"✅ 裂缝提取完成\n\n"
+            f"检测算法: {'HoughLinesP' if is_hough else '自适应阈值'}\n"
+            f"候选数: {n_candidate} 条\n"
+            f"覆盖像素: {n_px:,}",
+        )
         self.extracted.emit(mask)
 
 
