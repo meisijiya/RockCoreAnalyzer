@@ -87,12 +87,14 @@ class FractureParams:
         max_line_gap_px: 最大线间断距(像素)
         dilation_kernel_px: 线段→区域膨胀核(像素),用于将线段转为面积
         # 自适应方法专属参数 (适合真实岩石图,纹理复杂)
-        blur_kernel: 高斯模糊核大小 (奇数, 推荐 5-9)
-        adaptive_block: 自适应阈值邻域大小 (奇数, 推荐 15-25)
-        adaptive_C: 自适应阈值常数 (推荐 8-12)
-        morph_close: 闭运算核大小 (连接相近裂缝, 推荐 5-7)
-        morph_open: 开运算核大小 (去噪, 推荐 2-3)
-        min_aspect_ratio: 最小长宽比 (线状过滤, 推荐 2.0-2.5)
+        # v1.1.2: 默认改用 OTSU 暗色阈值 + 长宽比筛选,综合表现更好
+        blur_kernel: 高斯模糊核大小 (奇数, 0=不模糊)
+        adaptive_block: 自适应阈值邻域大小 (仅当 use_otsu=False)
+        adaptive_C: 自适应阈值常数 (仅当 use_otsu=False)
+        morph_close: 闭运算核大小 (连接相近裂缝, 0=不做)
+        morph_open: 开运算核大小 (去噪, 0=不做)
+        use_otsu: True 用 OTSU 暗色阈值(推荐), False 用自适应阈值
+        min_aspect_ratio: 最小长宽比 (线状过滤, 推荐 1.5-2.0)
         min_area_for_candidate: 候选最小面积(像素),排除过小区域
         max_area_ratio: 单个候选占图像最大比例(排除覆盖全图的假阳性)
         min_skeleton_length_px: 最小骨架长度(像素)
@@ -105,15 +107,16 @@ class FractureParams:
     min_line_length_px: int = 20
     max_line_gap_px: int = 15
     dilation_kernel_px: int = 3
-    # 自适应参数(推荐默认 — 对真实岩石图鲁棒)
-    blur_kernel: int = 7
+    # 自适应参数(v1.1.2 推荐默认)
+    blur_kernel: int = 0            # 0 = 不做模糊(OTSU 已能处理)
     adaptive_block: int = 21
     adaptive_C: int = 10
-    morph_close: int = 5
-    morph_open: int = 2
-    min_aspect_ratio: float = 2.0
-    min_area_for_candidate: int = 30
-    max_area_ratio: float = 0.30
+    morph_close: int = 0            # 0 = 不做闭运算(避免过度合并)
+    morph_open: int = 0             # 0 = 不做开运算
+    use_otsu: bool = True           # True: OTSU 暗色阈值(推荐); False: 自适应阈值
+    min_aspect_ratio: float = 1.5   # 1.5 比 2.0 更宽松,保留更多候选
+    min_area_for_candidate: int = 20
+    max_area_ratio: float = 0.30    # 排除超大区域(图像 > 30%)
     min_skeleton_length_px: int = 15
 
 
@@ -184,43 +187,60 @@ def _detect_fracture_adaptive(
     image: np.ndarray,
     params: FractureParams,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """自适应阈值 + 形态学 + 候选筛选算法.
+    """自适应算法 — v1.1.2 优化版.
 
-    适合真实岩石图(背景纹理复杂、对比度低):
-    1. 高斯模糊消除纹理
-    2. 自适应阈值找暗色(裂缝通常比周围暗)
-    3. 形态学闭运算连接相近裂缝
-    4. 形态学开运算去噪
+    步骤 (默认 OTSU,综合表现最好):
+    1. (可选) 高斯模糊消除噪点
+    2. OTSU 暗色阈值(默认) / 自适应阈值(可选)
+    3. (可选) 形态学闭运算连接相近裂缝
+    4. (可选) 形态学开运算去噪
     5. 候选筛选: 长宽比≥阈值 + 长度≥阈值 + 排除超大区域
+
+    v1.1.2 改进:
+    - 默认改用 OTSU 暗色阈值(综合两张真实图测试表现最好)
+    - 默认 AR=1.5(更宽松,保留更多候选)
+    - 默认不做形态学闭运算(避免过度合并裂缝)
+    - 默认不做高斯模糊(OTSU 已能处理大多数情况)
     """
     if image.ndim == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image
     h, w = gray.shape
-    # 1. 高斯模糊
-    ksize = max(3, params.blur_kernel | 1)  # 保证奇数
-    blurred = cv2.GaussianBlur(gray, (ksize, ksize), 0)
-    # 2. 自适应阈值(暗色=前景)
-    block = max(3, params.adaptive_block | 1)
-    adapt = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, block, params.adaptive_C,
-    )
-    # 3. 闭运算连接相近裂缝
+    # 1. (可选) 高斯模糊
+    if params.blur_kernel > 0:
+        ksize = max(3, params.blur_kernel | 1)
+        blurred = cv2.GaussianBlur(gray, (ksize, ksize), 0)
+    else:
+        blurred = gray
+    # 2. 阈值: OTSU 或 自适应
+    if params.use_otsu:
+        _, bin_mask = cv2.threshold(
+            blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
+        )
+    else:
+        block = max(3, params.adaptive_block | 1)
+        bin_mask = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, block, params.adaptive_C,
+        )
+    # 3. (可选) 闭运算连接相近裂缝
     if params.morph_close > 0:
         k_close = max(1, params.morph_close | 1)
-        adapt = cv2.morphologyEx(adapt, cv2.MORPH_CLOSE,
-                                  cv2.getStructuringElement(cv2.MORPH_RECT, (k_close, k_close)))
-    # 4. 开运算去噪
+        bin_mask = cv2.morphologyEx(
+            bin_mask, cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_RECT, (k_close, k_close)),
+        )
+    # 4. (可选) 开运算去噪
     if params.morph_open > 0:
         k_open = max(1, params.morph_open)
-        adapt = cv2.morphologyEx(adapt, cv2.MORPH_OPEN,
-                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open)))
+        bin_mask = cv2.morphologyEx(
+            bin_mask, cv2.MORPH_OPEN,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open)),
+        )
     # 5. 候选筛选
-    mask = _filter_fracture_candidates(adapt, params, image_area=w * h)
-    # 构造 edges (用 mask 作为可视化)
-    edges = adapt
+    mask = _filter_fracture_candidates(bin_mask, params, image_area=w * h)
+    edges = bin_mask
     return mask, edges, np.array([], dtype=np.int32).reshape(0, 1, 4)
 
 
