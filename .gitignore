@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.local
+
+# Output (generated files - regenerate with CLI)
+output/
+data/ground_truth/*.png
+data/ground_truth/*.jpg
+data/ground_truth/*.bmp
+
+# Windows Zone.Identifier files
+*:Zone.Identifier
+*.Zone.Identifier
+
+# OpenCode local config (user's private settings, not part of project)
+.opencode/
+
+# OpenSpec (proposal/spec drafts not in main project)
+openspec/
