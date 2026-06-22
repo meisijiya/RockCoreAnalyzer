@@ -1,6 +1,7 @@
 """核心算法模块.
 
-包含标尺换算、图像预处理、孔洞分割、数学形态学、孔洞分析与报告生成.
+包含标尺换算、图像预处理、孔洞分割、数学形态学、孔洞分析与报告生成,
+以及裂缝检测/分析/合成/准确率评估.
 """
 
 from .calibration import (
@@ -22,6 +23,21 @@ from .synthetic import (
     generate_synthetic_rock, SyntheticPore, make_default_synthetic,
 )
 from .io_utils import imread_unicode, imwrite_unicode, find_sample_image
+from .fracture import (
+    FractureParams, FractureAnalysisResult, Fracture,
+    FractureType, FractureOpenness, FractureFill, FractureEffectiveness,
+    classify_fracture_width, detect_fracture_mask, analyze_fractures,
+    draw_fracture_annotations, REPORT_MIN_WIDTH_MM,
+    FRACTURE_LARGE, FRACTURE_MEDIUM,
+)
+from .synthetic_fracture import (
+    SyntheticFracture, generate_synthetic_fracture_rock,
+    make_default_synthetic_fracture,
+)
+from .fracture_accuracy import (
+    FractureAccuracyReport, evaluate_fracture_accuracy,
+    detect_fractures_robust, compute_pixel_metrics, match_fractures,
+)
 
 __all__ = [
     "Scale", "Calibration", "pixel_to_mm", "mm_to_pixel",
@@ -34,4 +50,14 @@ __all__ = [
     "AccuracyReport", "evaluate_accuracy", "detect_pores_robust",
     "generate_synthetic_rock", "SyntheticPore", "make_default_synthetic",
     "imread_unicode", "imwrite_unicode", "find_sample_image",
+    # 裂缝分析
+    "FractureParams", "FractureAnalysisResult", "Fracture",
+    "FractureType", "FractureOpenness", "FractureFill", "FractureEffectiveness",
+    "classify_fracture_width", "detect_fracture_mask", "analyze_fractures",
+    "draw_fracture_annotations", "REPORT_MIN_WIDTH_MM",
+    "FRACTURE_LARGE", "FRACTURE_MEDIUM",
+    "SyntheticFracture", "generate_synthetic_fracture_rock",
+    "make_default_synthetic_fracture",
+    "FractureAccuracyReport", "evaluate_fracture_accuracy",
+    "detect_fractures_robust", "compute_pixel_metrics", "match_fractures",
 ]
