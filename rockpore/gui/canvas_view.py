@@ -330,19 +330,16 @@ class CanvasView(QFrame):
         self._zoom_label.setText(f"{int(self._canvas.scale * 100)}%")
 
     def _update_info(self):
-        if self._mask is not None:
-            from rockpore.core.analysis import analyze_pores
-            try:
-                scale = self._scale  # 用外部设置的 scale
-            except Exception:
-                pass
-            n = self._mask.shape[0] * self._mask.shape[1]
-            white = int((self._mask > 0).sum())
-            self._info_label.setText(
-                f"掩码覆盖: {white} px ({white / n * 100:.1f}%)"
-            )
-        else:
+        """更新底部信息条:显示掩码覆盖率.
+        I2 修复:移除死代码 (analyze_pores 导入、self._scale 不存在、静默 try/except).
+        """
+        if self._mask is None:
             self._info_label.setText("")
+            return
+        h, w = self._mask.shape[:2]
+        white = int((self._mask > 0).sum())
+        pct = white / (h * w) * 100
+        self._info_label.setText(f"掩码覆盖: {white:,} px ({pct:.1f}%)")
 
     def update_pos_label(self, pos: QPoint):
         if pos:

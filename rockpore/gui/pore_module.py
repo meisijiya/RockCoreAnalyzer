@@ -176,29 +176,37 @@ class Step4Preprocess(QWidget):
         sub = QLabel("调整图像以增强孔洞与基质的对比度")
         sub.setObjectName("pageSubtitle")
         v.addWidget(sub)
-        # 一键按钮
+        # I1: 重新设计 - 顶部 2 个预设按钮,中间细调表单,唯一「应用所有设置」按钮
         h = QHBoxLayout()
-        auto_btn = QPushButton("⚡ 自动色阶(推荐)")
+        auto_btn = QPushButton("⚡ 一键增强(推荐)")
         auto_btn.setObjectName("primaryButton")
         auto_btn.clicked.connect(self._auto_levels)
         h.addWidget(auto_btn)
-        for label, slot in [
-            ("🔆 增亮", lambda: self._adjust_brightness(30)),
-            ("🌑 变暗", lambda: self._adjust_brightness(-30)),
-            ("🔍 增强对比", self._auto_levels),
-            ("♻ 重置", self._reset),
-        ]:
-            b = QPushButton(label)
-            b.clicked.connect(slot)
-            h.addWidget(b)
+        reset_btn = QPushButton("♻ 重置为原图")
+        reset_btn.setObjectName("ghostButton")
+        reset_btn.clicked.connect(self._reset)
+        h.addWidget(reset_btn)
         h.addStretch(1)
         v.addLayout(h)
+        # 说明
+        info = QLabel("💡 用法:\n"
+                       "1. 在下方调整任意参数(亮度/对比度/Gamma/...)或勾选增强选项\n"
+                       "2. 点击底部「应用所有设置」一次性应用全部修改\n"
+                       "3. 多次点击「应用」会基于上次结果叠加(链式处理)\n"
+                       "4. 不满意可点「重置为原图」回到原始图像")
+        info.setStyleSheet("color: #57606a; font-size: 12px; padding: 8px; line-height: 1.5;")
+        info.setWordWrap(True)
+        v.addWidget(info)
         # 细调面板
         form_card = Card("tip")
         form = QFormLayout()
+        # 通用设置
+        self.auto_levels_check = QCheckBox("启用自动色阶(推荐开启)")
+        self.auto_levels_check.setChecked(True)
         self.brightness = QDoubleSpinBox()
         self.brightness.setRange(-100, 100)
         self.brightness.setValue(0)
+        self.brightness.setSuffix("  (-100~100)")
         self.contrast = QDoubleSpinBox()
         self.contrast.setRange(0.1, 3.0)
         self.contrast.setSingleStep(0.1)
@@ -210,12 +218,17 @@ class Step4Preprocess(QWidget):
         self.blur = QSpinBox()
         self.blur.setRange(0, 31)
         self.blur.setValue(0)
-        self.sharpen_check = QCheckBox("锐化")
-        self.invert_check = QCheckBox("底片效果")
+        self.blur.setSuffix(" px  (0=不模糊)")
+        # 增强选项
+        self.sharpen_check = QCheckBox("锐化 (USM)")
+        self.invert_check = QCheckBox("底片效果 (像素取反)")
         self.gray_check = QCheckBox("转灰度")
-        apply_btn = QPushButton("应用设置")
+        # 唯一应用按钮
+        apply_btn = QPushButton("✅ 应用所有设置")
         apply_btn.setObjectName("primaryButton")
+        apply_btn.setMinimumHeight(40)
         apply_btn.clicked.connect(self._apply_params)
+        form.addRow(self.auto_levels_check)
         form.addRow("亮度:", self.brightness)
         form.addRow("对比度:", self.contrast)
         form.addRow("Gamma:", self.gamma)
@@ -231,11 +244,12 @@ class Step4Preprocess(QWidget):
 
     def _get_image(self):
         ctx = self.ctx()
-        if "processed_image" in ctx and ctx["processed_image"] is not None:
+        if ctx.get("processed_image") is not None:
             return ctx["processed_image"]
         return ctx.get("image")
 
     def _auto_levels(self):
+        """一键增强:LAB+CLAHE+色阶."""
         img = self._get_image()
         if img is None:
             QMessageBox.warning(self, "提示", "请先打开图像")
@@ -244,23 +258,18 @@ class Step4Preprocess(QWidget):
         out = apply_pore_enhancement(img)
         self._emit(out)
 
-    def _adjust_brightness(self, delta):
-        img = self._get_image()
-        if img is None:
-            return
-        from rockpore.core.preprocessing import adjust_brightness
-        out = adjust_brightness(img, delta)
-        self._emit(out)
-
     def _reset(self):
+        """重置:丢弃所有预处理,回到原图."""
         ctx = self.ctx()
-        if "image" in ctx:
+        if ctx.get("image") is not None:
             self._emit(ctx["image"].copy())
             ctx.pop("processed_image", None)
 
     def _apply_params(self):
+        """应用所有设置(亮度/对比度/Gamma/模糊/锐化/底片/灰度/自动色阶)."""
         img = self._get_image()
         if img is None:
+            QMessageBox.warning(self, "提示", "请先打开图像")
             return
         from rockpore.core.preprocessing import preprocess, PreprocessParams
         params = PreprocessParams(
@@ -271,7 +280,7 @@ class Step4Preprocess(QWidget):
             sharpen=self.sharpen_check.isChecked(),
             invert=self.invert_check.isChecked(),
             to_gray=self.gray_check.isChecked(),
-            auto_levels=False,
+            auto_levels=self.auto_levels_check.isChecked(),  # 修复:读 auto_levels_check
         )
         out = preprocess(img, params)
         self._emit(out)
@@ -302,10 +311,11 @@ class Step5Extract(QWidget):
         form = QFormLayout()
         self.method = QComboBox()
         self.method.addItems([
-            "auto(OTSU 自动阈值)",
+            "auto(OTSU 自动阈值) ★推荐",
             "adaptive(自适应阈值)",
-            "triangle(三角法)",
         ])
+        # triangle 方法在 segmentation.extract_pores 中未实现,
+        # 暴露给用户会触发 ValueError;只在 accuracy 内部 fallback 使用
         self.tolerance = QSpinBox()
         self.tolerance.setRange(0, 255)
         self.tolerance.setValue(30)
@@ -332,25 +342,41 @@ class Step5Extract(QWidget):
 
     def _extract(self):
         ctx = self.ctx()
-        if "image" not in ctx:
+        if "image" not in ctx or ctx["image"] is None:
             QMessageBox.warning(self, "提示", "请先打开图像")
             return
+        # S2: 如果当前掩码已被用户手动编辑过(脏),弹确认后再覆盖
+        if ctx.get("mask") is not None and ctx.get("mask_dirty", False):
+            ret = QMessageBox.question(
+                self, "确认重新提取",
+                "当前掩码已被您手动编辑过(橡皮擦/添加)。\n"
+                "重新提取会覆盖您的手动修改。\n\n"
+                "是否继续?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return
         img = ctx.get("processed_image")
         if img is None:
             img = ctx["image"]
         from rockpore.core.segmentation import extract_pores
         from rockpore.core.morphology import remove_noise, morphological_open
         method_map = {
-            "auto(OTSU 自动阈值)": "otsu",
+            "auto(OTSU 自动阈值) ★推荐": "otsu",
             "adaptive(自适应阈值)": "adaptive",
-            "triangle(三角法)": "triangle",
         }
         m = self.method.currentText()
-        mask = extract_pores(img, method=method_map.get(m, "otsu"))
+        try:
+            mask = extract_pores(img, method=method_map.get(m, "otsu"))
+        except ValueError as e:
+            QMessageBox.critical(self, "提取失败", f"提取方法错误:\n{e}")
+            return
         mask = morphological_open(mask, kernel_size=2)
         if self.min_area.value() > 0:
             mask = remove_noise(mask, min_area=self.min_area.value())
         ctx["mask"] = mask
+        ctx["mask_dirty"] = False  # 自动提取后重置脏标志
         self.extracted.emit(mask)
 
 
@@ -413,15 +439,18 @@ class Step6Edit(QWidget):
         info.setWordWrap(True)
         v.addWidget(info)
         v.addStretch(1)
-        self._undo_stack = []
+        # I5: 撤销栈已提取到 ModuleWorkflowPage.context["_edit_undo_stack"]
+        # 避免步骤切换时 widget 重建导致撤销历史丢失
 
     def _apply(self):
         ctx = self.ctx()
-        if "mask" not in ctx or ctx["mask"] is None:
+        if ctx.get("mask") is None:
             QMessageBox.warning(self, "提示", "请先提取孔洞")
             return
         mask = ctx["mask"]
-        self._undo_stack.append(mask.copy())
+        # 撤销栈放在 context,跨步骤保留
+        undo_stack = ctx.setdefault("_edit_undo_stack", [])
+        undo_stack.append(mask.copy())
         op = self.op.currentIndex()
         from rockpore.core.morphology import (
             dilate_region, erode_region, morphological_open, morphological_close,
@@ -443,11 +472,13 @@ class Step6Edit(QWidget):
         self.edited.emit(out)
 
     def _undo(self):
-        if not self._undo_stack:
+        ctx = self.ctx()
+        undo_stack = ctx.get("_edit_undo_stack", [])
+        if not undo_stack:
             QMessageBox.information(self, "提示", "没有可撤销的操作")
             return
-        last = self._undo_stack.pop()
-        self.ctx()["mask"] = last
+        last = undo_stack.pop()
+        ctx["mask"] = last
         self.edited.emit(last)
 
 

@@ -33,7 +33,7 @@ from typing import Dict, List, Optional
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt, QSettings
+from PyQt5.QtCore import Qt, QSettings, QTimer
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QAction, QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel,
@@ -62,7 +62,6 @@ class ModuleWorkflowPage(QWidget):
     - 中央步骤内容(画布在上,步骤面板在下)
     - 右侧教学说明侧栏
     """
-    image_loaded = pyqtSignal = None  # 占位
 
     def __init__(self, module: AnalysisModule, parent=None):
         super().__init__(parent)
@@ -73,15 +72,19 @@ class ModuleWorkflowPage(QWidget):
             "image_path": "",
             "scale": None,
             "mask": None,
+            "mask_dirty": False,        # 标记:True=用户手动修改过(避免被自动覆盖)
             "processed_image": None,
             "analysis_result": None,
             "info": {},
+            "_edit_undo_stack": [],     # Step6 形态学编辑的撤销栈(提到 page 层避免丢失)
         }
         # 当前步骤索引 (0-based)
         self.current_step_idx = 0
         # 步骤面板栈
         self.step_panels: List[QWidget] = []
         self._build_ui()
+        # 画布手动修改 → 同步到 context(关键修复 S1)
+        self.canvas.mask_modified.connect(self._on_canvas_mask_modified)
 
     def _build_ui(self):
         h = QHBoxLayout(self)
@@ -188,13 +191,24 @@ class ModuleWorkflowPage(QWidget):
         self.canvas.set_image(image)
 
     def _on_mask_extracted(self, mask: np.ndarray):
-        """步骤 5 完成: 显示掩码 + 跳到第 6 步(二次编辑)."""
+        """步骤 5 完成: 显示掩码 + 清标注(避免旧标注残留)."""
         self.canvas.set_mask(mask)
-        # 设置掩码后会绘制,无需跳步,让学生手动确认
+        self.canvas.set_annotations([])  # I4: 清空旧标注
+        self.context["mask_dirty"] = False  # 自动提取的掩码不算"脏"
 
     def _on_mask_updated(self, mask: np.ndarray):
         """步骤 6 完成: 更新掩码显示."""
         self.canvas.set_mask(mask)
+
+    def _on_canvas_mask_modified(self, mask: np.ndarray):
+        """画布手动涂抹 → 同步到 context(关键 S1 修复).
+        用户在画布上用橡皮擦/添加工具修改的掩码会触发此信号,
+        把最新掩码写回 context['mask'],标记 mask_dirty=True.
+        这样 Step6 形态学编辑会读取到包含涂抹的版本,
+        Step8 孔洞分析也能识别用户手动画的区域.
+        """
+        self.context["mask"] = mask
+        self.context["mask_dirty"] = True
 
     def _on_analysis_done(self, result):
         """步骤 8 完成: 标注孔洞 + 跳到第 9 步."""
@@ -238,12 +252,19 @@ class ModuleWorkflowPage(QWidget):
             self.step_list.setCurrentRow(idx)
 
     def on_image_loaded(self, image: np.ndarray, path: str):
-        """图像被主窗口加载后通知各页面更新."""
+        """图像被主窗口加载后通知各页面更新.
+        重置所有分析相关的 context 字段,避免旧图的处理结果污染新图.
+        """
         self.context["image"] = image
         self.context["image_path"] = path
         self.context["mask"] = None
+        self.context["mask_dirty"] = False
+        self.context["processed_image"] = None
         self.context["analysis_result"] = None
+        self.context["info"] = {}
+        self.context["_edit_undo_stack"] = []
         self.canvas.set_image(image)
+        self.canvas.set_annotations([])  # 清掉旧标注
 
 
 class _StepPanelHost:
@@ -606,7 +627,3 @@ def run_gui():
     win = MainWindow()
     win.show()
     return app.exec_()
-
-
-# 兼容旧 import
-from PyQt5.QtCore import QTimer  # noqa: E402
