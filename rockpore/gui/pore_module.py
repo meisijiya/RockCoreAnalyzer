@@ -430,47 +430,17 @@ class Step5Extract(QWidget):
         v.addStretch(1)
 
     def _extract(self):
+        """自动提取孔洞.
+        行为: 总是基于原图/预处理图生成新 mask,覆盖之前的 mask(包括用户的擦除/添加).
+
+        用户在 Step 6 的擦除/添加**不**影响此步骤;它们只影响 Step 8 的孔洞分析结果
+        (用户擦除的位置不会被识别为孔洞,用户添加的位置会被当作新孔洞).
+        """
         ctx = self.ctx()
         if "image" not in ctx or ctx["image"] is None:
             QMessageBox.warning(self, "提示", "请先打开图像")
             return
-        # S2 + 新需求:如果当前掩码已被用户手动编辑过(脏),询问合并策略
-        user_mask = ctx.get("mask")
-        user_dirty = ctx.get("mask_dirty", False)
-        merge_mode = "overwrite"  # 默认覆盖
-        if user_mask is not None and user_dirty:
-            # 提供 3 选项:覆盖 / 合并 / 取消
-            # 用 QMessageBox.question 不能 3 选项,改用自定义对话框
-            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
-            dlg = QDialog(self)
-            dlg.setWindowTitle("合并模式")
-            dlg.setMinimumWidth(420)
-            v = QVBoxLayout(dlg)
-            v.addWidget(QLabel("当前掩码已被您手动编辑过(橡皮擦/添加)。\n"
-                              "请选择如何合并新的提取结果:"))
-            btn_layout = QVBoxLayout()
-            btn_overwrite = QPushButton("📝 完全覆盖 - 丢弃您的编辑,使用新提取")
-            btn_merge_add = QPushButton("➕ 合并(您的编辑优先) - 保留您添加的孔洞,在空白处做新提取")
-            btn_merge_only = QPushButton("🧹 仅在您擦除处做新提取 - 保留您添加的")
-            btn_cancel = QPushButton("❌ 取消")
-            btn_layout.addWidget(btn_overwrite)
-            btn_layout.addWidget(btn_merge_add)
-            btn_layout.addWidget(btn_merge_only)
-            btn_layout.addWidget(btn_cancel)
-            v.addLayout(btn_layout)
-            result = {"mode": "cancel"}
-            def set_mode(m):
-                result["mode"] = m
-                dlg.accept()
-            btn_overwrite.clicked.connect(lambda: set_mode("overwrite"))
-            btn_merge_add.clicked.connect(lambda: set_mode("merge_add"))
-            btn_merge_only.clicked.connect(lambda: set_mode("merge_only"))
-            btn_cancel.clicked.connect(lambda: set_mode("cancel"))
-            dlg.exec_()
-            merge_mode = result["mode"]
-            if merge_mode == "cancel":
-                return
-        # 1. 自动提取
+        # 1. 自动提取(基于原图/预处理后的图,与用户 mask 编辑无关)
         img = ctx.get("processed_image")
         if img is None:
             img = ctx["image"]
@@ -482,39 +452,17 @@ class Step5Extract(QWidget):
         }
         m = self.method.currentText()
         try:
-            new_mask = extract_pores(img, method=method_map.get(m, "otsu"))
+            mask = extract_pores(img, method=method_map.get(m, "otsu"))
         except ValueError as e:
             QMessageBox.critical(self, "提取失败", f"提取方法错误:\n{e}")
             return
-        new_mask = morphological_open(new_mask, kernel_size=2)
+        mask = morphological_open(mask, kernel_size=2)
         if self.min_area.value() > 0:
-            new_mask = remove_noise(new_mask, min_area=self.min_area.value())
-        # 2. 合并用户编辑(根据 merge_mode)
-        if merge_mode == "overwrite" or user_mask is None or not user_dirty:
-            mask = new_mask
-        elif merge_mode == "merge_add":
-            # 合并:用户 mask=255 的位置保留 + 新提取的孔洞
-            # 即:cv2.bitwise_or(user_mask, new_mask)
-            mask = cv2.bitwise_or(user_mask, new_mask)
-        elif merge_mode == "merge_only":
-            # 仅在用户擦除处(=0)做新提取
-            # result = (new_mask WHERE user_mask=0) | (user_mask WHERE user_mask=255)
-            # = new_mask & ~user_mask | user_mask
-            # = new_mask | user_mask(因为 new_mask & ~user_mask ≤ new_mask,加 user_mask 不变)
-            # 实际:用户擦除的位置,如果新提取是 1 就保留;用户添加的位置始终保留
-            mask = cv2.bitwise_or(user_mask, new_mask)
-        else:
-            mask = new_mask
+            mask = remove_noise(mask, min_area=self.min_area.value())
+        # 2. 总是覆盖之前的 mask(包括用户的编辑)
+        # 用户在 Step 6 的擦除/添加只影响 Step 8 分析,不触发重新提取
         ctx["mask"] = mask
-        ctx["mask_dirty"] = False
-        # 显示合并结果提示
-        if merge_mode != "overwrite" and user_dirty:
-            new_in_user = int(((user_mask == 0) & (mask == 255)).sum())
-            kept_user = int(((user_mask == 255) & (mask == 255)).sum())
-            self.status_message = (
-                f"✓ 合并完成: 保留您添加的 {kept_user} px 区域 + "
-                f"擦除处新发现 {new_in_user} px 区域"
-            )
+        ctx["mask_dirty"] = False  # 重新提取后,标记为干净
         self.extracted.emit(mask)
 
 

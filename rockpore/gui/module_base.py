@@ -118,15 +118,15 @@ def make_default_pore_steps() -> List[StepDefinition]:
         ),
         StepDefinition(
             index=5, title="孔洞提取", subtitle="自动识别暗色孔洞区域",
-            why="将孔洞从基质中分离,生成二值掩码。",
+            why="将孔洞从基质中分离,生成二值掩码。每次提取会覆盖之前的掩码(包括 Step 6 的擦除/添加)。",
             how="选择提取方法(OTSU/自适应/颜色匹配),调整最小面积阈值。",
             geology="碳酸盐岩孔洞通常为深色,OTSU 阈值法基于灰度直方图自动分割。",
         ),
         StepDefinition(
-            index=6, title="二次编辑", subtitle="形态学优化孔洞区域",
-            why="初步提取可能存在噪点、断裂、粘连,需数学形态学优化。",
-            how="选择膨胀/腐蚀/开/闭运算,调整核大小与迭代次数。",
-            geology="开运算去小毛刺,闭运算填补小孔,膨胀腐蚀调整边界。",
+            index=6, title="二次编辑", subtitle="手工调整 + 形态学优化",
+            why="用橡皮擦/添加工具精细调整自动提取的孔洞区域(增加或减少孔洞),或用形态学运算去噪/连接断裂。",
+            how="① 顶部工具栏选「🧹 擦除」或「➕ 添加」直接在画布上涂抹;② 下方表单选膨胀/腐蚀/开/闭运算调整核大小。",
+            geology="用户的擦除/添加**只影响 Step 8 的孔洞分析**——擦除的位置不会识别为孔洞,添加的位置会被当作新孔洞;但不影响 Step 5 重新提取。",
         ),
         StepDefinition(
             index=7, title="孔洞填充", subtitle="填充掩码内小孔",
@@ -135,9 +135,9 @@ def make_default_pore_steps() -> List[StepDefinition]:
             geology="依据 PDF 1.3 节,直径 < 2mm 的孔洞在报告中不计数。",
         ),
         StepDefinition(
-            index=8, title="孔洞分析", subtitle="计算面积、直径、面孔率",
-            why="将掩码转换为定量参数(面积/直径/分类)。",
-            how="点击「自动分析」,系统计算每个孔洞的等效圆直径与分类。",
+            index=8, title="孔洞分析", subtitle="计算面积、直径、面孔率(含用户的擦除/添加)",
+            why="基于当前掩码(含 Step 6 的擦除/添加)计算每个连通域的面积、等效圆直径、分类。",
+            how="点击「自动分析」,系统统计孔洞并显示。**表格中行数 = 最终纳入分析的孔洞数**。",
             geology="孔洞按直径分类:大洞>10mm,中洞5-10mm,小洞1-5mm,针孔<1mm。",
         ),
         StepDefinition(
