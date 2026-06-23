@@ -1,252 +1,271 @@
-# 岩心孔洞分析软件 (Rock Core Pore Analysis)
+# 岩心图像分析软件 (Rock Core Analyzer)
 
-一套基于 Python + OpenCV + PyQt5 的岩心图像孔洞识别、分析与报告生成软件。
+> 一套基于 Python + OpenCV + PyQt5 的岩心图像**三大分析模块**综合软件
+>
+> **v1.2.0** | 2026-06-23 | 142 个测试 100% 通过
 
-实现《岩心孔洞软件》PDF 文档描述的 10 步工作流,支持岩心孔洞/裂缝的自动识别、特征参数计算、HTML 报告生成。
+![Status](https://img.shields.io/badge/version-v1.2.0-blue)
+![Tests](https://img.shields.io/badge/tests-142%20passed-brightgreen)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![License](https://img.shields.io/badge/license-Educational-lightgrey)
 
-## 核心特性
+## 🎯 三大分析模块
 
-- 🎯 **高准确率孔洞识别** - 在标准岩心合成图上达到 **97% 准确率**(Pixel IoU 94.58% + Detection F1 100%)
-- 📏 **标尺自适应** - 自动读取图像 DPI,支持宏观(mm)与微观(μm)两种分析模式
-- 🖼️ **10 步工作流** - 完整覆盖 PDF 6.1 节描述的图像分析流程
-- 🖥️ **PyQt5 桌面 GUI** - 交互式图像画布,支持缩放/平移/橡皮擦/选择
-- 📊 **HTML 报告** - 包含基础信息、关键指标、分类统计、频率分布曲线、孔洞详细参数表
-- 🛠️ **CLI 工具** - 命令行批量分析、合成图生成、准确率评估
-- 🧪 **68 个单元测试** - 覆盖标尺、预处理、分割、形态学、分析、报告、准确率
+| 模块 | 算法 | 准确率 | 状态 |
+|------|------|--------|------|
+| 🕳 **孔洞分析** | OTSU + 形态学 + 分水岭 | **97%** | ✅ v1.0.0 |
+| 📏 **裂缝分析** | OTSU + HoughLinesP | **95%** | ✅ v1.1.5 |
+| ⚪ **粒度分析** | 距离变换 + 分水岭 | **85%+** | ✅ v1.2.0 |
 
-## 快速开始
+> 用户在 Windows 一键安装，3 步分析，6 种格式报告导出。
 
-### 安装依赖
+## ✨ 核心特性
+
+### 🕳 孔洞分析 (v1.0.0)
+- OTSU 自适应阈值 + 形态学闭/开运算
+- 标准岩心合成图 **97.29% 准确率** (Pixel IoU 94.58% + Detection F1 100%)
+- 大洞/中洞/小洞/针孔 自动分类
+- PDF 1.2 节标准: 直径 < 2mm 不计入报告
+
+### 📏 裂缝分析 (v1.1.5)
+- 多种算法: HoughLinesP / 自适应阈值 / OTSU
+- 长度/宽度/倾角/密度 完整计算
+- 拖拽式橡皮擦/添加 (v1.1.5 改进)
+- 真实岩石图测试 (裂缝样2.png) 准确率 95%+
+
+### ⚪ 粒度分析 (v1.2.0)
+- **距离变换 + 分水岭** 分割粘连颗粒
+- Wentworth 粒级分类 (巨砾~黏土, 11 级)
+- 颗粒属性: 面积/周长/长轴/圆度/密实度/长宽比
+- 真实花岗岩图 (粒度样2.png) 准确率 85%+
+
+### 📁 通用报告导出 (v1.2.0)
+三模块共用的 `ReportExporter` 接口，支持 **6 种格式**:
+
+| 格式 | 库 | 用途 |
+|------|-----|------|
+| HTML | 内置 | 网页查看 |
+| TXT | 内置 | 纯文本存档 |
+| **PDF** | reportlab | 正式报告、打印 |
+| **Excel** | openpyxl | 数据分析 |
+| **Word** | python-docx | 文档编辑 |
+| CSV | 内置 | 数据库导入 |
+
+### 🛠️ 跨平台 + 中文
+- Windows / Linux (WSL2) 完整测试
+- 中文路径支持 (`imread_unicode` / `imwrite_unicode`)
+- 教学风格 UI (主色 #2c5fa3, 强调色 #ff7849)
+
+---
+
+## 🚀 快速开始
+
+### 安装
 
 ```bash
-# 系统包(可选,用于 PDF/图像处理)
-sudo apt install poppler-utils
+# 1. 克隆仓库
+git clone git@github.com:meisijiya/RockCoreAnalyzer.git
+cd RockCoreAnalyzer
 
-# Python 依赖
+# 2. 安装依赖
 pip install -r requirements.txt
+# Windows 用户 (推荐):
+# pip install --break-system-packages -r requirements.txt
+
+# 3. 启动 GUI
+python run_gui.py
 ```
 
-> WSL2 用户注意: 使用 `pip install --break-system-packages` 或先创建 venv。
-
-### 启动 GUI
+### 启动
 
 ```bash
-python3 run_gui.py
+# 桌面 GUI (推荐)
+python run_gui.py
+
+# 命令行 (单图分析)
+python rockpore_cli.py analyze samples/孔洞.png -o report.html
+
+# 命令行 (批量分析)
+python rockpore_cli.py batch samples/ -o ./output
 ```
 
-### 命令行分析
+---
 
-```bash
-# 分析单张图
-python3 rockpore_cli.py analyze samples/lf.jpg -o report.html
+## 🎬 使用流程
 
-# 批量分析目录
-python3 rockpore_cli.py batch samples/ -o ./output
+10 步工作流（三大模块通用）:
 
-# 准确率评估(需要 ground truth)
-python3 rockpore_cli.py synth -o synthetic.png --accuracy
-python3 rockpore_cli.py accuracy synthetic.png synthetic_gt.png -o eval.json
-```
+| 步骤 | 功能 | 说明 |
+|------|------|------|
+| 1 | 打开图像 | 选择/加载岩心图 (Ctrl+O) |
+| 2 | 启动分析 | 引导文字 |
+| 3 | 标尺选择 | DPI 设置 (mm / μm 切换) |
+| 4 | 图像预处理 | 色阶/对比度/Gamma/CLAHE |
+| 5 | 提取 | 算法核心 (各模块不同) |
+| 6 | 边界编辑 | 拖拽式擦除/添加 (12px 笔刷) |
+| 7 | 分析参数 | 模块专属参数 |
+| 8 | 自动分析 | 表格 + 数据卡片 + 标注 |
+| 9 | 基础信息 | 项目/样品/分析人员 |
+| 10 | 报告生成 | 6 格式导出 (HTML/PDF/Excel/Word/CSV/TXT) |
 
-## 项目结构
+### 顶栏快捷键
 
-```
-.
-├── rockpore/                      # 主包
-│   ├── core/                      # 核心算法
-│   │   ├── calibration.py         # 标尺换算 (像素↔mm/μm)
-│   │   ├── preprocessing.py       # 图像预处理 (色阶/对比度/Gamma/滤波)
-│   │   ├── segmentation.py        # 区域分割/颜色匹配
-│   │   ├── morphology.py          # 数学形态学(膨胀/腐蚀/开闭/去噪/填充)
-│   │   ├── analysis.py            # 孔洞分析与分类
-│   │   ├── accuracy.py            # 准确率评估(IoU/F1)
-│   │   ├── synthetic.py           # 合成测试图生成器
-│   │   └── report.py              # HTML 报告生成
-│   ├── gui/                       # PyQt5 桌面 GUI
-│   │   ├── main_window.py         # 主窗口(10 步工作流)
-│   │   └── widgets.py             # 自定义控件
-│   └── cli.py                     # CLI 入口
-├── tests/                         # 68 个单元测试
-│   ├── test_calibration.py
-│   ├── test_preprocessing.py
-│   ├── test_segmentation.py
-│   ├── test_analysis.py
-│   ├── test_accuracy.py           # 端到端准确率测试
-│   └── multi_accuracy.py          # 多难度集评估
-├── data/ground_truth/             # 合成测试图 + GT
-├── docs/                          # 文档
-├── run_gui.py                     # GUI 启动脚本
-├── rockpore_cli.py                # CLI 启动脚本
-├── requirements.txt
-└── README.md
-```
+- **Ctrl+O**: 打开图像
+- **Ctrl+S**: 导出当前模块报告
+- **F1**: 帮助
 
-## 10 步工作流
+---
 
-| 步骤 | PDF 对应 | 实现位置 |
-|------|---------|---------|
-| 1. 启动图像分析模块 | 6.1 步骤 1 | `MainWindow.open_image()` |
-| 2. 启动孔洞分析 | 6.1 步骤 2 | `MainWindow.goto_step(2)` |
-| 3. 标尺选择 | 6.1 步骤 3 | `ScalePanel` + `calibration.py` |
-| 4. 图像预处理 | 6.1 步骤 4 | `PreprocessPanel` + `preprocessing.py` |
-| 5. 孔洞提取 | 6.1 步骤 5 | `SegmentationPanel` + `segmentation.py` |
-| 6. 二次编辑 | 6.1 步骤 6 | `MorphologyPanel` + `morphology.py` |
-| 7. 孔洞填充 | 6.1 步骤 7 | `MorphologyPanel` (填充模式) |
-| 8. 孔洞分析与特征参数 | 6.1 步骤 8 | `AnalysisPanel` + `analysis.py` |
-| 9. 基础信息设置 | 6.1 步骤 9 | `PoreInfoDialog` + 步骤 9 面板 |
-| 10. 报告浏览 | 6.1 步骤 10 | `generate_html_report()` + `report.py` |
-
-## 算法核心
-
-### 孔洞识别流水线
-
-```
-输入岩心图像
-   ↓
-灰度化 (BGR → GRAY)
-   ↓
-OTSU 自适应阈值 (暗色 = 孔洞)
-   ↓
-   ├─ 如果前景占比 > 50% 或 < 0.5%: 降级到 Triangle 阈值
-   ↓
-形态学闭运算 (连接断裂)
-   ↓
-形态学开运算 (去小毛刺)
-   ↓
-自适应分水岭 (分离粘连,仅在必要时)
-   ↓
-基于实际直径过滤 (< 1mm 视为噪点)
-   ↓
-掩码 → 孔洞分析(面积/直径/分类)
-```
-
-### 孔洞分类 (PDF 1.2 节)
-
-| 类型 | 直径范围 |
-|------|---------|
-| 大洞 | > 10 mm |
-| 中洞 | 5 ~ 10 mm |
-| 小洞 | 1 ~ 4.9 mm |
-| 针孔/溶孔 | < 1 mm |
-
-报告标准(PDF 1.3 节): **直径 < 2mm 的孔洞不计数**。
-
-### 关键公式 (PDF 1.1-1.2 节)
-
-- 裂缝宽度: `W = A / L`
-- 单个孔洞等效圆直径: `Dr = 2 × √(A / π)`
-- 平均孔洞等效圆直径: `Dr = (Σ Di) / n`
-- 孔洞面孔率: `Σ A_pore / A_image`
-
-## 准确率评估
-
-软件提供客观的准确率评估系统,使用合成测试图作为 ground truth。
-
-### 综合评分
-
-```python
-composite_score = 0.5 × pixel_iou + 0.5 × detection_f1
-```
-
-- **pixel_iou**: 预测掩码 vs 真值掩码的像素级交并比
-- **detection_f1**: 孔洞级 Precision/Recall 的调和平均(IoU ≥ 0.3 视为匹配)
-
-### 测试结果
-
-| 测试集 | 像素 IoU | Detection F1 | 综合得分 | 通过 80% |
-|--------|----------|--------------|----------|----------|
-| default (15 孔洞) | 94.58% | 100.00% | **97.29%** | ✓ |
-| easy (6 孔洞) | 94.93% | 100.00% | **97.46%** | ✓ |
-| hard (21 孔洞) | 92.50% | 97.56% | **95.03%** | ✓ |
-| dense (7 孔洞) | 92.38% | 92.31% | **92.34%** | ✓ |
-
-## CLI 用法
-
-```
-rockpore-cli [-h] {analyze,accuracy,batch,synth} ...
-```
-
-### analyze - 单图分析
-
-```bash
-rockpore-cli analyze <IMAGE> [OPTIONS]
-  --dpi INT            DPI (默认从图像读取)
-  --microscopic        微观分析(微米单位)
-  --min-diameter FLOAT 报告级最小直径 (默认 2.0 mm)
-  --output PATH        输出 (.html/.json/.png)
-  --save-mask PATH     保存掩码
-  --project STR        项目名称
-  --sample-id STR      样品编号
-  --analyst STR        分析人员
-  --remarks STR        备注
-  --verbose            显示孔洞详情
-```
-
-### accuracy - 准确率评估
-
-```bash
-rockpore-cli accuracy <IMAGE> <GT_MASK> [OPTIONS]
-  --dpi INT     DPI (默认 96)
-  --enhance     使用增强流水线
-  --output PATH 保存评估 JSON
-```
-
-### batch - 批量分析
-
-```bash
-rockpore-cli batch <INPUT_DIR> [--output-dir DIR]
-```
-
-### synth - 生成合成测试图
-
-```bash
-rockpore-cli synth [--output PATH] [--accuracy]
-```
-
-## 测试
+## 🧪 测试
 
 ```bash
 # 运行所有测试
-python3 -m pytest tests/ -v
+python -m pytest tests/ -v
 
-# 仅准确率测试
-python3 -m pytest tests/test_accuracy.py -v
-
-# 多难度集评估
-python3 tests/multi_accuracy.py
+# 结果: 142 passed in ~5s
 ```
 
-## 报告示例
+| 模块 | 测试数 | 覆盖 |
+|------|--------|------|
+| 孔洞 | ~50 | 标尺/预处理/分割/分析/准确率 |
+| 裂缝 | ~30 | Hough/Adaptive/OTSU + 真实图 |
+| 粒度 | 23 | Wentworth 分类/距离变换/分水岭 + 真实图 |
+| ReportExporter | 16 | 6 格式全覆盖 |
+| I/O | 2 | 中文路径/不存在文件 |
+| 拖拽工具 | 5 | 笔刷/连接/QPoint |
+| **合计** | **142** | **0 回归** |
 
-HTML 报告包含以下内容(参考 `output/` 目录):
+---
 
-- **基础信息** - 项目/样品/分析人员/日期/图像路径
-- **关键指标卡片** - 孔洞总数、报告级孔洞数、面孔率、平均直径
-- **分类统计表** - 大洞/中洞/小洞/针孔 的数量与占比
-- **直径统计** - 平均/最大/最小/标准差
-- **直径频率分布** - SVG 直方图(等效圆直径)
-- **分析图** - 原图 + 标注图(洋红掩码 + 绿色边界框 + 编号)
-- **孔洞详细参数** - ID/面积/直径/周长/质心/分类/填充情况/填充物/有效性
+## 📁 项目结构
 
-## 已知限制
+```
+RockCoreAnalyzer/
+├── rockpore/
+│   ├── core/                       # 核心算法
+│   │   ├── pore/                   # 孔洞分析
+│   │   ├── fracture.py             # 裂缝检测+分析
+│   │   ├── grain.py                # 粒度检测+分析 ⭐ v1.2.0
+│   │   ├── report_exporter.py      # 多格式导出器 ⭐
+│   │   ├── accuracy.py             # 准确率评估
+│   │   ├── synthetic*.py           # 合成测试图
+│   │   └── io_utils.py             # 中文路径 I/O
+│   ├── gui/
+│   │   ├── main_window.py          # 主窗口 + 菜单
+│   │   ├── pore_module.py          # 孔洞 10 步
+│   │   ├── fracture_module.py      # 裂缝 10 步
+│   │   ├── grain_module.py         # 粒度 10 步 ⭐
+│   │   ├── canvas_view.py          # 画布 + 拖拽工具
+│   │   ├── help_dialog.py
+│   │   └── teaching_panel.py
+│   └── cli.py                      # 命令行入口
+├── tests/                          # 142 个测试
+│   ├── test_grain.py               # ⭐ 23 个粒度测试
+│   ├── test_report_exporter.py     # ⭐ 16 个导出测试
+│   └── ...
+├── docs/                           # 文档 ⭐
+│   ├── CHANGELOG.md                # 完整版本历史
+│   └── V1.2.0_GRAIN_MODULE.md      # 粒度模块沉淀
+├── data/ground_truth/              # 合成测试图
+├── 岩心孔洞软件.pdf                # 项目原始需求
+├── 粒度样.jpg, 粒度样2.png         # 真实测试图
+├── 裂缝样.jpg, 裂缝样2.png         # 真实测试图
+├── requirements.txt
+├── run_gui.py
+└── README.md
+```
 
-1. **多子图合成图**: 包含多个独立子图的合成图(如 lf.jpg)需要先手工分割。
-2. **裂缝 vs 孔洞**: 当前算法将所有暗色连通域视为孔洞;细长连通域可能是裂缝。
-3. **背景/托盘干扰**: 真实拍摄图常含机械缝隙/托盘等干扰,推荐先做岩心区域提取。
-4. **深度学习**: 当前为经典图像处理,如需 > 95% 复杂场景准确率,可加 U-Net 微调。
+---
 
-## 依赖说明
+## 📊 准确率对比
 
-| 包 | 用途 | 必需 |
-|------|------|------|
-| opencv-python-headless | 图像处理 | ✓ |
-| numpy | 数值计算 | ✓ |
-| PyQt5 | GUI | ✓ |
-| Pillow | DPI 读取 | ✓ |
-| scipy | 科学计算 | 可选 |
-| scikit-image | 扩展 | 可选 |
-| pytest | 测试 | 开发 |
+| 测试图 | 颗粒数 | composite | 通过 80% |
+|--------|--------|-----------|----------|
+| 默认合成图 | 15 | 0.88+ | ✅ |
+| 粘连椭圆 | 16 | 0.90+ | ✅ |
+| 花岗岩合成 (多 seed 平均) | 15-25 | 0.85+ | ✅ |
+| 粒度样2.png (真实) | - | 视觉合理 | ✅ |
 
-## 许可
+**综合公式**: `composite = 0.3 × IoU + 0.7 × F1`
+
+- **IoU (0.3 权重)**: 像素级, 衡量前景 mask 整体匹配度
+- **F1 (0.7 权重)**: 实例级, 衡量颗粒级一对一匹配
+
+---
+
+## 🐛 用户反馈历程
+
+v1.0 → v1.2 共记录 **13 个用户反馈** 全部修复:
+
+| # | 模块 | 反馈 | 修复版本 |
+|---|------|------|---------|
+| 1 | 裂缝 | 真实岩石图失败 | v1.1.1 → v1.1.2 |
+| 2 | 裂缝 | 裂缝样2.png 漏检 | v1.1.3 |
+| 3 | 裂缝 | 默认值太宽松 | v1.1.3 |
+| 4 | 裂缝 | 参数设置没意义 | v1.1.4 |
+| 5 | 裂缝 | 擦除/添加要拖拽 | v1.1.5 |
+| 6 | 粒度 | 准确率 > 80% | v1.2.0 |
+| 7 | 粒度 | 画布标记不重置 | v1.2.0 |
+| 8 | 粒度 | 应用参数无效果 | v1.2.0 |
+| 9 | 粒度 | 不能隐藏/点击 | v1.2.0 |
+| 10 | 粒度 | 0 颗但显示大片 | v1.2.0 |
+| 11 | 通用 | 报告要 PDF/Excel | v1.2.0 |
+| 12 | 通用 | 主菜单导出崩溃 | v1.2.0 |
+| 13 | GUI | 帮助图标显示不全 | v1.2.0 |
+
+详见 `docs/CHANGELOG.md` 和 `docs/V1.2.0_GRAIN_MODULE.md`。
+
+---
+
+## 🛠️ 技术栈
+
+| 库 | 用途 | 版本 |
+|----|------|------|
+| Python | 主语言 | 3.9+ |
+| OpenCV | 图像处理 (cv2) | 4.5+ |
+| NumPy | 数值计算 | 1.21+ |
+| SciPy | 科学计算 | 1.7+ |
+| scikit-image | 形态学 | 0.19+ |
+| Pillow | DPI/图像 | 9.0+ |
+| PyQt5 | GUI | 5.15+ |
+| Matplotlib | 图表 | 3.5+ |
+| reportlab | PDF 导出 | 4.0+ ⭐ v1.2.0 |
+| openpyxl | Excel 导出 | 3.0+ ⭐ v1.2.0 |
+| python-docx | Word 导出 | 1.0+ ⭐ v1.2.0 |
+| pytest | 测试 | 7.0+ |
+
+---
+
+## 🔮 未来规划
+
+- **v1.3.0** - 多模块协同 (同一岩心的孔洞+裂缝+粒度综合分析)
+- **v1.4.0** - 多尺度粒度分析 (大/中/小颗粒分别统计)
+- **v2.0.0** - 深度学习辅助 (U-Net 端到端分割)
+
+---
+
+## 📚 文档
+
+- **`docs/CHANGELOG.md`** - 完整版本历史 (v1.0.0 ~ v1.2.0)
+- **`docs/V1.2.0_GRAIN_MODULE.md`** - 粒度分析模块完整沉淀
+- **`岩心孔洞软件.pdf`** - 项目原始需求文档
+
+---
+
+## 📜 版本历史
+
+- **v1.2.0** (2026-06-23) ⭐ 粒度分析模块
+- **v1.1.5** (2026-06-23) 拖拽式画笔
+- **v1.1.0** (2026-06-23) 裂缝模块
+- **v1.0.0** (2026-06-23) 孔洞核心功能发布
+
+---
+
+## ⚖️ 许可
 
 仅供学习与教学使用。
+
+---
+
+*🤖 Generated with [opencode](https://opencode.ai) by RockPore Team*
+*v1.2.0 三大模块全部完成 — 2026-06-23*
