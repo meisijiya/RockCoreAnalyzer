@@ -294,6 +294,11 @@ class Step5GrainExtract(QWidget):
         if image is None:
             QMessageBox.warning(self, "提示", "请先打开图像(Step 1)")
             return
+        # v1.2.0 修复: 重提取前清掉旧状态,避免残留标注和数据
+        # 之前只 emit 'extracted' 信号,虽然 _on_mask_extracted 会清标注,
+        # 但用户报告: "重提取后图片标记不会重置",可能消息框阻塞或事件时序
+        # 导致画布没及时刷新。直接在 _extract 内部清,更可靠。
+        ctx["analysis_result"] = None  # 强制 Step 8 重新计算
         from rockpore.core.grain import GrainParams, detect_grain_mask, analyze_grains
         from rockpore.core.calibration import Scale
 
@@ -315,6 +320,10 @@ class Step5GrainExtract(QWidget):
         ctx["grain_morph_open"] = self.morph_open.value()
         ctx["grain_min_area"] = self.min_area.value()
         ctx["grain_dtr"] = self.dtr.value() / 100.0
+        # 直接清掉画布上的旧标注(更可靠,不等消息框)
+        page = self.parent()
+        if page and hasattr(page, "canvas"):
+            page.canvas.set_annotations([])
         QMessageBox.information(self, "提取完成",
             f"提取到 {result.grain_count_filtered} 个颗粒\n"
             f"平均粒径: {result.average_diameter_mm:.1f} mm\n"
