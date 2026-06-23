@@ -9,6 +9,12 @@
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![License](https://img.shields.io/badge/license-Educational-lightgrey)
 
+## 📸 实机演示
+
+![应用截图](docs/assets/screenshot.png)
+
+*孔洞分析 Step 8: 252 个孔洞, 21.61% 面孔率, 平均直径 2.87mm。教学风格 UI, 右侧实时说明「为什么做 / 怎么做 / 地质意义」三栏。*
+
 ## 🎯 三大分析模块
 
 | 模块 | 算法 | 准确率 | 状态 |
@@ -58,35 +64,180 @@
 
 ---
 
-## 🚀 快速开始
+## 🚀 部署与启动
 
-### 安装
+### 1. 系统要求
+
+| 项目 | 要求 |
+|------|------|
+| **操作系统** | Windows 10/11, Linux (Ubuntu 22.04+), macOS 12+ |
+| **Python** | 3.9 ~ 3.12 (推荐 3.10) |
+| **磁盘空间** | ~500 MB (含依赖) |
+| **内存** | ≥ 2 GB (处理大图建议 4 GB+) |
+| **显示** | 1366×768+ (PyQt5 GUI) |
+
+WSL2 (Windows Subsystem for Linux) **完全支持**,推荐用于开发。
+
+### 2. 克隆仓库
 
 ```bash
-# 1. 克隆仓库
-git clone git@github.com:meisijiya/RockCoreAnalyzer.git
+# HTTPS (无需 SSH key,推荐初次使用)
+git clone https://github.com/meisijiya/RockCoreAnalyzer.git
 cd RockCoreAnalyzer
 
-# 2. 安装依赖
-pip install -r requirements.txt
-# Windows 用户 (推荐):
-# pip install --break-system-packages -r requirements.txt
-
-# 3. 启动 GUI
-python run_gui.py
+# 或 SSH (需先配置 SSH key)
+git clone git@github.com:meisijiya/RockCoreAnalyzer.git
+cd RockCoreAnalyzer
 ```
 
-### 启动
+### 3. 安装依赖
+
+#### 方案 A: venv (推荐,隔离环境)
+
+**Linux / macOS / WSL2:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+**Windows (PowerShell):**
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+**Windows (CMD):**
+```cmd
+python -m venv venv
+venv\Scripts\activate.bat
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+#### 方案 B: 系统 Python (快速试用)
+
+**Linux / macOS:**
+```bash
+pip3 install -r requirements.txt
+```
+
+**Windows:**
+```powershell
+pip install -r requirements.txt
+# 或在某些 Python 安装:
+py -m pip install -r requirements.txt
+```
+
+> ⚠️ Windows 上若提示 "externally-managed-environment",需加 `--break-system-packages`:
+> ```powershell
+> pip install --break-system-packages -r requirements.txt
+> ```
+
+#### 方案 C: Conda
+
+```bash
+conda create -n rockpore python=3.10
+conda activate rockpore
+pip install -r requirements.txt
+```
+
+### 4. 必需依赖说明
+
+`requirements.txt` 已包含所有依赖:
+
+| 包 | 用途 | 必需 |
+|----|------|------|
+| opencv-python-headless >= 4.5.0 | 图像处理 (cv2) | ✓ |
+| numpy >= 1.21.0 | 数值计算 | ✓ |
+| scipy >= 1.7.0 | 科学计算 (距离变换等) | ✓ |
+| scikit-image >= 0.19.0 | 形态学、扩展算法 | ✓ |
+| Pillow >= 9.0.0 | DPI 读取、图像 | ✓ |
+| PyQt5 >= 5.15.0 | **GUI 必需** | ✓ |
+| matplotlib >= 3.5.0 | 图表、报告 | ✓ |
+| **reportlab >= 4.0.0** | **PDF 导出** (v1.2.0+) | 推荐 |
+| **openpyxl >= 3.0.0** | **Excel 导出** (v1.2.0+) | 推荐 |
+| **python-docx >= 1.0.0** | **Word 导出** (v1.2.0+) | 推荐 |
+| pytest >= 7.0.0 | 测试 | 开发 |
+
+> 💡 最后 3 个 (reportlab/openpyxl/python-docx) 缺失也能跑,但**导出会失败**。建议安装。
+
+### 5. 启动应用
 
 ```bash
 # 桌面 GUI (推荐)
 python run_gui.py
 
-# 命令行 (单图分析)
-python rockpore_cli.py analyze samples/孔洞.png -o report.html
+# Windows:
+py run_gui.py
+```
 
-# 命令行 (批量分析)
+启动后会看到:
+- **顶部**: 菜单栏 (文件/视图/帮助) + 工具栏 (打开/保存/重做/帮助)
+- **左侧**: 10 步工作流导航
+- **中央**: 画布 (显示图像+标注)
+- **右侧**: 教学说明 (为什么做/怎么做/地质意义)
+- **底部**: 状态栏
+
+### 6. 验证安装
+
+```bash
+# 运行测试,确保 142 个测试 100% 通过
+python -m pytest tests/ -q
+# 期望: 142 passed in ~5s
+
+# 验证 GUI 启动
+python -c "import rockpore.gui.main_window; print('✓ 导入成功')"
+```
+
+### 7. 第一次使用
+
+1. 启动 GUI: `python run_gui.py`
+2. 点击 **📂 打开** 或菜单 文件→打开图像
+3. 选择测试图: `孔洞.png` / `裂缝样2.png` / `粒度样2.png`
+4. 按左侧 10 步流程操作
+5. 第 10 步选择格式导出报告
+
+### 8. 常见问题
+
+**Q: Windows 上 GUI 启动报 "DLL load failed"?**
+A: 安装 Microsoft Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+**Q: cv2.imread 读不了中文路径图片?**
+A: 使用 `rockpore.core.io_utils.imread_unicode()`,程序内部已处理
+
+**Q: PDF 导出报 "ImportError: reportlab"?**
+A: `pip install reportlab` (推荐装上 3 个导出库)
+
+**Q: 测试报 "Qt platform plugin could not be initialized"?**
+A: Linux 需装 `sudo apt install libxcb-xinerama0 libxcb-cursor0`;或用 `QT_QPA_PLATFORM=offscreen` 跳过 GUI
+
+**Q: 启动慢 / 占内存大?**
+A: 处理大图 (4K+) 建议内存 ≥ 8 GB。`opencv-python-headless` 已避免 GUI 依赖。
+
+### 9. CLI 模式 (无 GUI)
+
+```bash
+# 单图分析 (HTML 报告)
+python rockpore_cli.py analyze 孔洞.png -o report.html
+
+# 批量分析
 python rockpore_cli.py batch samples/ -o ./output
+
+# 合成测试图 + 准确率评估
+python rockpore_cli.py synth -o synthetic.png --accuracy
+python rockpore_cli.py accuracy synthetic.png synthetic_gt.png -o eval.json
+```
+
+### 10. 更新升级
+
+```bash
+git pull origin master
+pip install -r requirements.txt --upgrade
+python -m pytest tests/ -q   # 验证
 ```
 
 ---
