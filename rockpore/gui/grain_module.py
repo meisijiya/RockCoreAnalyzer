@@ -110,7 +110,7 @@ import cv2
 
 class Step4GrainPreprocess(QWidget):
     """步骤 4: 粒度图像预处理."""
-    completed = pyqtSignal()
+    preprocessed = pyqtSignal(np.ndarray)
 
     def __init__(self, ctx_getter, parent=None):
         super().__init__(parent)
@@ -153,18 +153,24 @@ class Step4GrainPreprocess(QWidget):
         form.addRow("高斯模糊:", self.blur_kernel)
         cv_layout.addLayout(form)
         v.addWidget(param_card)
-        # 预览按钮
+        # 按钮行: 预览 + 重置
         h = QHBoxLayout()
         preview_btn = QPushButton("👁 预览预处理")
         preview_btn.setObjectName("primaryButton")
         preview_btn.setMinimumHeight(36)
         preview_btn.clicked.connect(self._preview)
         h.addWidget(preview_btn)
+        reset_btn = QPushButton("♻ 重置为原图")
+        reset_btn.setObjectName("ghostButton")
+        reset_btn.setMinimumHeight(36)
+        reset_btn.clicked.connect(self._reset)
+        h.addWidget(reset_btn)
         h.addStretch(1)
         v.addLayout(h)
         v.addStretch(1)
 
     def _preview(self):
+        """预览:在画布直接显示预处理结果(灰度转BGR)."""
         ctx = self.ctx()
         image = ctx.get("image")
         if image is None:
@@ -179,13 +185,24 @@ class Step4GrainPreprocess(QWidget):
         bk = self.blur_kernel.value()
         if bk > 0:
             gray = cv2.GaussianBlur(gray, (bk | 1, bk | 1), 0)
-        # 存预处理图
-        ctx["preprocessed"] = gray
+        # 保存参数 + 灰度预处理图
+        ctx["preprocessed_gray"] = gray
         ctx["grain_blur"] = self.blur_kernel.value()
-        cv2.imwrite("/tmp/grain_preview.png", gray)
-        QMessageBox.information(self, "预处理完成",
-            f"CLAHE(clip={self.clahe_clip.value()}) + 高斯模糊(核={self.blur_kernel.value()}) 完成\n预览已保存: /tmp/grain_preview.png")
-        self.completed.emit()
+        # 转 BGR 用于画布显示
+        if len(gray.shape) == 2:
+            display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        else:
+            display = gray.copy()
+        self.preprocessed.emit(display)
+
+    def _reset(self):
+        """重置为原图."""
+        ctx = self.ctx()
+        image = ctx.get("image")
+        if image is None:
+            return
+        ctx.pop("preprocessed_gray", None)
+        self.preprocessed.emit(image.copy())
 
 
 # ============= 步骤 5: 颗粒提取 =============
