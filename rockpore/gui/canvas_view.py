@@ -681,7 +681,8 @@ class _CanvasSurface(QWidget):
                     painter.drawText(rx + 4, ry - 5, text)
         # 十字标线(取色器工具时)
         if self.tool == CanvasTool.COLOR_PICK:
-            mx, my = self.mapFromGlobal(QCursor.pos())
+            _gpos = self.mapFromGlobal(QCursor.pos())
+            mx, my = _gpos.x(), _gpos.y()
             if self.rect().contains(QPoint(mx, my)):
                 pen = QPen(QColor(255, 200, 0, 180), 1, Qt.DashLine)
                 painter.setPen(pen)
@@ -689,7 +690,8 @@ class _CanvasSurface(QWidget):
                 painter.drawLine(0, my, self.width(), my)
         # v1.1.5: 笔刷预览圆圈 (ERASE/ADD 工具时显示当前笔刷大小)
         if self.tool in (CanvasTool.ERASE, CanvasTool.ADD):
-            mx, my = self.mapFromGlobal(QCursor.pos())
+            _gpos = self.mapFromGlobal(QCursor.pos())
+            mx, my = _gpos.x(), _gpos.y()
             if self.rect().contains(QPoint(mx, my)):
                 brush_screen_radius = max(2, int(self.brush_radius * self.scale))
                 # 笔刷颜色: 擦除=红色虚线, 添加=绿色虚线
