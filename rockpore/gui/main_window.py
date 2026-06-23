@@ -196,9 +196,14 @@ class ModuleWorkflowPage(QWidget):
         # Step8 analyzed: 更新数据卡片(默认不画所有标注)
         if hasattr(panel, "analyzed"):
             panel.analyzed.connect(self._on_analysis_done)
-        # Step8 pore_selected: 用户点击表格行 → 画布高亮该孔洞
+        # Step8 表格行选中: 用户点击表格行 → 画布高亮该对象
+        # 孔洞/裂缝/粒度 三种类型都支持 (v1.2.0)
         if hasattr(panel, "pore_selected"):
             panel.pore_selected.connect(self._on_pore_selected)
+        if hasattr(panel, "fracture_selected"):
+            panel.fracture_selected.connect(self._on_pore_selected)
+        if hasattr(panel, "grain_selected"):
+            panel.grain_selected.connect(self._on_pore_selected)
         # Step8 show_all_changed: 用户切换"显示所有"
         if hasattr(panel, "show_all_changed"):
             panel.show_all_changed.connect(self._on_show_all_toggled)
@@ -294,34 +299,62 @@ class ModuleWorkflowPage(QWidget):
             self.canvas.set_annotations([])
             self._show_all_annotations = False
 
-    def _on_pore_selected(self, pore_id: int):
-        """用户点击孔洞详情表某行 → 画布高亮该孔洞."""
+    def _on_pore_selected(self, item_id: int):
+        """用户点击详情表某行 → 画布高亮该对象.
+        v1.2.0: 支持孔洞/裂缝/粒度 三种结果类型.
+        """
         from .canvas_view import Annotation
         result = self.context.get("analysis_result")
-        if result is None or pore_id < 0:
+        if result is None or item_id < 0:
             self.canvas.set_annotations([])
             return
-        # 只显示选中的那一个
-        for p in result.pores:
-            if p.id == pore_id:
-                self.canvas.set_annotations([
-                    Annotation(
-                        id=p.id, bbox=p.bbox, label=f"{p.diameter_real:.1f}mm",
-                        color=(0, 200, 100),
-                    )
-                ])
-                return
+        # 裂缝结果
+        if hasattr(result, "fractures"):
+            for f in result.fractures:
+                if f.id == item_id:
+                    self.canvas.set_annotations([
+                        Annotation(
+                            id=f.id, bbox=f.bbox,
+                            label=f"#{f.id} {f.length_real:.1f}mm×{f.width_real:.2f}mm",
+                            color=(0, 100, 255),
+                        )
+                    ])
+                    return
+        # 粒度结果
+        elif hasattr(result, "grains"):
+            for g in result.grains:
+                if g.id == item_id:
+                    self.canvas.set_annotations([
+                        Annotation(
+                            id=g.id, bbox=g.bbox,
+                            label=f"#{g.id} {g.diameter_mm:.1f}mm",
+                            color=(255, 128, 0),
+                        )
+                    ])
+                    return
+        # 孔洞结果
+        else:
+            for p in result.pores:
+                if p.id == item_id:
+                    self.canvas.set_annotations([
+                        Annotation(
+                            id=p.id, bbox=p.bbox, label=f"{p.diameter_real:.1f}mm",
+                            color=(0, 200, 100),
+                        )
+                    ])
+                    return
 
     def _on_show_all_toggled(self, show_all: bool):
-        """用户切换"显示所有标注"按钮 → 全部显示或全部隐藏."""
+        """用户切换"显示所有标注"按钮 → 全部显示或全部隐藏.
+        v1.2.0: 支持孔洞/裂缝/粒度 三种结果类型.
+        """
         from .canvas_view import Annotation
         result = self.context.get("analysis_result")
         if result is None:
             return
         if show_all:
-            # v1.1.3: 支持两种结果类型(孔洞 / 裂缝)
             annotations = []
-            # 检查是否是裂缝结果(FractureAnalysisResult)
+            # 裂缝结果
             if hasattr(result, "fractures"):
                 for f in result.fractures:
                     annotations.append(Annotation(
@@ -329,7 +362,15 @@ class ModuleWorkflowPage(QWidget):
                         label=f"#{f.id} {f.length_real:.1f}mm×{f.width_real:.2f}mm",
                         color=(0, 100, 255),
                     ))
-            # 否则按孔洞处理(PoreAnalysisResult)
+            # 粒度结果 (v1.2.0)
+            elif hasattr(result, "grains"):
+                for g in result.grains:
+                    annotations.append(Annotation(
+                        id=g.id, bbox=g.bbox,
+                        label=f"#{g.id} {g.diameter_mm:.1f}mm",
+                        color=(255, 128, 0),
+                    ))
+            # 孔洞结果
             elif hasattr(result, "pores"):
                 for p in result.pores:
                     annotations.append(Annotation(
@@ -337,8 +378,10 @@ class ModuleWorkflowPage(QWidget):
                         color=(0, 200, 100),
                     ))
             self.canvas.set_annotations(annotations)
+            self._show_all_annotations = True
         else:
             self.canvas.set_annotations([])
+            self._show_all_annotations = False
 
     def _on_info_saved(self, data: dict):
         """步骤 9 完成: 跳到第 10 步(报告)."""

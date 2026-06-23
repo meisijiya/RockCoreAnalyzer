@@ -521,6 +521,7 @@ class Step8GrainAnalyze(QWidget):
     """步骤 8: 粒度统计 (表格 + 统计参数)."""
     analyzed = pyqtSignal(object)
     grain_selected = pyqtSignal(int)
+    show_all_changed = pyqtSignal(bool)  # v1.2.0: 用户切换"显示所有"
 
     def __init__(self, ctx_getter, parent=None):
         super().__init__(parent)
@@ -542,6 +543,13 @@ class Step8GrainAnalyze(QWidget):
         run_btn.setMinimumHeight(36)
         run_btn.clicked.connect(self._run)
         h.addWidget(run_btn)
+        # v1.2.0: 显示所有标注开关 (与 fracture 一致)
+        self.show_all_btn = QPushButton("🙈 隐藏所有标注")
+        self.show_all_btn.setObjectName("ghostButton")
+        self.show_all_btn.setCheckable(True)
+        self.show_all_btn.setChecked(True)
+        self.show_all_btn.toggled.connect(self._on_show_all_toggled)
+        h.addWidget(self.show_all_btn)
         h.addStretch(1)
         v.addLayout(h)
         # 统计卡片
@@ -644,9 +652,23 @@ class Step8GrainAnalyze(QWidget):
     def _on_selection(self):
         rows = set(idx.row() for idx in self.table.selectedIndexes())
         if rows:
-            import random
-            gid = list(rows)[0] + 1
-            self.grain_selected.emit(gid)
+            row = list(rows)[0]
+            # v1.2.0 修复: 用 _grains_by_id 取真实 ID,不再用 row+1 假设
+            # (行号可能与 ID 不一致,如排序后)
+            if 0 <= row < len(self._grains_by_id):
+                # 取该行的第一列(就是 ID)
+                id_item = self.table.item(row, 0)
+                if id_item:
+                    gid = int(id_item.text())
+                    self.grain_selected.emit(gid)
+
+    def _on_show_all_toggled(self, checked: bool):
+        """v1.2.0: 切换"显示所有"按钮 (与 fracture 一致)."""
+        self.show_all_changed.emit(checked)
+        if checked:
+            self.show_all_btn.setText("🙈 隐藏所有标注")
+        else:
+            self.show_all_btn.setText("👁 显示所有标注")
 
 
 # ============= 步骤 9: 基础信息 =============
