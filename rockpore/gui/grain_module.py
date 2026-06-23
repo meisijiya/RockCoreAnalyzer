@@ -287,11 +287,13 @@ class Step5GrainExtract(QWidget):
         ctx = self.ctx()
         # v1.2.0 改进: Step 4 预览过的灰度图真正传给 Step 5 (Plan A)
         # 跟 pore/fracture 一致 — Step 4 不只是给人看
-        image = ctx.get("preprocessed_gray") or ctx.get("image")
+        # 修复: 不能用 `or` 因为 numpy 数组的 or 会触发 ambiguous 错误
+        image = ctx.get("preprocessed_gray")
+        if image is None:
+            image = ctx.get("image")
         if image is None:
             QMessageBox.warning(self, "提示", "请先打开图像(Step 1)")
             return
-        used_preprocess = ctx.get("preprocessed_gray") is not None
         from rockpore.core.grain import GrainParams, detect_grain_mask, analyze_grains
         from rockpore.core.calibration import Scale
 
@@ -555,7 +557,10 @@ class Step8GrainAnalyze(QWidget):
     def _run(self):
         ctx = self.ctx()
         # v1.2.0: 优先用 Step 4 预览过的灰度图,与 Step 5 保持一致
-        image = ctx.get("preprocessed_gray") or ctx.get("image")
+        # 修复: 不能用 `or` 因为 numpy 数组的 or 会触发 ambiguous 错误
+        image = ctx.get("preprocessed_gray")
+        if image is None:
+            image = ctx.get("image")
         mask = ctx.get("mask")
         if image is None or mask is None:
             QMessageBox.warning(self, "提示", "请先完成 Step 5 颗粒提取")

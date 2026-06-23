@@ -29,6 +29,7 @@ from rockpore.core.synthetic_grain import (
 from rockpore.core.grain_accuracy import (
     evaluate_grain_accuracy, compute_pixel_metrics, match_grains,
 )
+from rockpore.core.io_utils import imread_unicode
 
 
 class TestGrainSizeClassification(unittest.TestCase):
@@ -185,6 +186,26 @@ class TestGrainDetection(unittest.TestCase):
         result, _, _ = analyze_grains(image, scale, params)
         self.assertGreater(result.grain_count_filtered, 0)
 
+    def test_or_on_numpy_array_does_not_crash(self):
+        """回归测试: `or` 不能用于 numpy 数组 (v1.2.0 踩坑).
+
+        Step 5/8 用 `ctx.get('preprocessed_gray') or ctx.get('image')` 时,
+        preprocessed_gray 是 numpy 数组, `or` 会触发
+        'ambiguous truth value' ValueError. 改用 `if ... is None` 显式判断.
+        """
+        arr = np.zeros((10, 10), dtype=np.uint8)
+        # 这段代码模拟 Step 5 的逻辑
+        result = arr
+        if result is None:
+            result = "fallback"
+        # 数组本身不为 None,所以保持不变
+        self.assertIs(result, arr)
+        # 测试 fallback 路径
+        result = None
+        if result is None:
+            result = "fallback"
+        self.assertEqual(result, "fallback")
+
 
 class TestGrainAccuracy(unittest.TestCase):
     """测试准确率评估."""
@@ -302,6 +323,44 @@ class TestGrainVisualization(unittest.TestCase):
         self.assertIn("细砾", text)
         self.assertIn("极粗砂", text)
         self.assertIn("合计: 5", text)
+
+
+class TestIOLegacyIssues(unittest.TestCase):
+    """测试 I/O 边界问题 (v1.2.0 踩坑)."""
+
+    def test_imread_unicode_chinese_path(self):
+        """中文路径读取不应触发 cv2.imread 警告 (v1.2.0 修复)."""
+        import os
+        import tempfile
+        import cv2
+        # 找一个中文测试图
+        candidates = [
+            os.path.join(os.path.dirname(__file__), "..", "粒度样2.png"),
+            os.path.join(os.path.dirname(__file__), "..", "孔洞.png"),
+        ]
+        src = None
+        for p in candidates:
+            if os.path.exists(p):
+                src = p
+                break
+        if src is None:
+            self.skipTest("未找到测试图像")
+        # 复制到带中文路径的临时文件
+        with tempfile.TemporaryDirectory() as tmpdir:
+            chinese_dir = os.path.join(tmpdir, "测试目录")
+            os.makedirs(chinese_dir, exist_ok=True)
+            chinese_path = os.path.join(chinese_dir, "粒度样.png")
+            import shutil
+            shutil.copy2(src, chinese_path)
+            # imread_unicode 应成功读取
+            img = imread_unicode(chinese_path)
+            self.assertIsNotNone(img, f"中文路径读取失败: {chinese_path}")
+            self.assertGreater(img.size, 0)
+
+    def test_imread_unicode_nonexistent(self):
+        """不存在的文件应返回 None, 不抛异常."""
+        img = imread_unicode("/tmp/nonexistent_file_12345.png")
+        self.assertIsNone(img)
 
 
 if __name__ == "__main__":

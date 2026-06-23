@@ -15,15 +15,11 @@ import numpy as np
 
 def imread_unicode(path: Union[str, Path], flags: int = cv2.IMREAD_COLOR) -> Optional[np.ndarray]:
     """读取图像,支持中文路径(Windows).
-    cv2.imread 在 Windows 下使用 GBK 解码路径,对 UTF-8 中文路径会失败.
-    本函数先用 np.fromfile 读取字节,再用 cv2.imdecode 解码,绕过文件名解码.
+    cv2.imread 在 Windows 下使用 GBK 解码路径,对 UTF-8 中文路径会失败
+    (会报 'can't open/read file' 警告 + 文件名乱码).
+    本函数直接用 np.fromfile 读取字节,再用 cv2.imdecode 解码,绕过文件名解码.
     """
     path = str(path)
-    # 先尝试标准 imread
-    img = cv2.imread(path, flags)
-    if img is not None:
-        return img
-    # 备选:字节读取 + imdecode
     try:
         data = np.fromfile(path, dtype=np.uint8)
         if data.size == 0:
