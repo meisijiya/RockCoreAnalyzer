@@ -102,6 +102,7 @@ class GrainModule(AnalysisModule):
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSpinBox, QComboBox, QFormLayout, QMessageBox,
+    QSizePolicy,
 )
 from PyQt5.QtCore import pyqtSignal, Qt
 from .teaching_panel import Card
@@ -518,20 +519,23 @@ class Step8GrainAnalyze(QWidget):
             r, c = divmod(i, 3)
             frame = QFrame()
             frame.setObjectName("dataCard")
-            frame.setMinimumHeight(70)
+            frame.setMinimumHeight(78)
+            frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             fv = QVBoxLayout(frame)
-            fv.setContentsMargins(8, 4, 8, 4)
-            title_lbl = QLabel(label)
-            title_lbl.setStyleSheet("color: #57606a; font-size: 11px;")
-            fv.addWidget(title_lbl)
-            val_lbl = QLabel("-")
-            val_lbl.setStyleSheet("color: #2c5fa3; font-size: 16px; font-weight: bold;")
-            fv.addWidget(val_lbl)
+            fv.setContentsMargins(10, 8, 10, 8)
+            lab = QLabel(label)
+            lab.setObjectName("dataCardLabel")
+            fv.addWidget(lab)
+            val = QLabel("-")
+            val.setObjectName("dataCardValue")
+            val.setMinimumHeight(30)
+            val.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            fv.addWidget(val)
             unit_lbl = QLabel(unit)
             unit_lbl.setStyleSheet("color: #8b949e; font-size: 10px;")
             fv.addWidget(unit_lbl)
             cards_grid.addWidget(frame, r, c)
-            self._cards[key] = val_lbl
+            self._cards[key] = val
         v.addLayout(cards_grid)
         # 表格
         self.table = QTableWidget()

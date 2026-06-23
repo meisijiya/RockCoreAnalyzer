@@ -202,6 +202,9 @@ class ModuleWorkflowPage(QWidget):
         # Step8 show_all_changed: 用户切换"显示所有"
         if hasattr(panel, "show_all_changed"):
             panel.show_all_changed.connect(self._on_show_all_toggled)
+        # Step7 params_changed: 应用参数后跳到第 8 步并自动分析
+        if hasattr(panel, "params_changed"):
+            panel.params_changed.connect(self._on_params_changed)
         # Step9 saved: 跳到第 10 步
         if hasattr(panel, "saved"):
             panel.saved.connect(self._on_info_saved)
@@ -227,6 +230,21 @@ class ModuleWorkflowPage(QWidget):
         """步骤 6 完成: 更新掩码显示."""
         self.canvas.set_mask(mask)
 
+    def _on_params_changed(self):
+        """步骤 7 完成: 应用参数后跳到第 8 步并自动分析.
+
+        v1.2.0 (粒度模块) 用户反馈: 改完参数后没看到任何变化。
+        根因: Step 7 只把参数存到 context,Step 8 不会自动重跑。
+        修复: 跳到 Step 8,调用其 _run() 自动重算并刷新数据卡片+表格+画布。
+        """
+        # 跳到第 8 步 (index 7)
+        self.goto_step(7)
+        # 触发 Step 8 自动分析
+        if 7 < len(self.step_panels):
+            step8 = self.step_panels[7]
+            if hasattr(step8, "_run"):
+                step8._run()
+
     def _on_canvas_mask_modified(self, mask: np.ndarray):
         """画布手动涂抹 → 同步到 context(关键 S1 修复).
         用户在画布上用橡皮擦/添加工具修改的掩码会触发此信号,
@@ -241,11 +259,11 @@ class ModuleWorkflowPage(QWidget):
         """步骤 8 完成: 默认根据模块类型决定是否画标注.
         - 孔洞: 默认不显示(避免遮挡)
         - 裂缝: 默认显示所有(v1.1.3, 用户更容易看到主裂缝)
+        - 粒度: 默认显示所有(v1.2.0, 用户容易看到颗粒)
         用户可在右侧"显示所有标注"按钮切换,或点击表格行单独高亮.
         """
         if result is None:
             return
-        # v1.1.3: 根据结果类型决定默认行为
         from .canvas_view import Annotation
         if hasattr(result, "fractures"):
             # 裂缝分析结果: 默认显示所有标注
@@ -256,6 +274,18 @@ class ModuleWorkflowPage(QWidget):
                     color=(0, 100, 255),
                 )
                 for f in result.fractures
+            ]
+            self.canvas.set_annotations(annotations)
+            self._show_all_annotations = True
+        elif hasattr(result, "grains"):
+            # 粒度分析结果 (v1.2.0): 默认显示所有标注
+            annotations = [
+                Annotation(
+                    id=g.id, bbox=g.bbox,
+                    label=f"#{g.id} {g.diameter_mm:.1f}mm",
+                    color=(255, 128, 0),
+                )
+                for g in result.grains
             ]
             self.canvas.set_annotations(annotations)
             self._show_all_annotations = True
