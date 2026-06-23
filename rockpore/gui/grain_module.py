@@ -314,6 +314,12 @@ class Step5GrainExtract(QWidget):
         result, _, markers = analyze_grains(image, scale, params, mask=bin_mask)
         ctx["mask"] = bin_mask
         ctx["markers"] = markers
+        # v1.2.0 修复: 画布显示实际颗粒分割区域(markers > 1),
+        # 而不是原始 OTSU 二值图。用户反馈: 「提取到 2 个颗粒,
+        # 但整个图片都快标记完了」 — 因为 bin_mask 是 OTSU 原始
+        # 前景(可能占 60% 图像),而 markers 只有实际颗粒区域。
+        # 视觉与数量对不上 → 改用 markers 区域显示
+        grain_region_mask = ((markers > 1).astype(np.uint8)) * 255
         ctx["grain_params"] = params
         ctx["grain_blur"] = self.blur_kernel.value()
         ctx["grain_morph_close"] = self.morph_close.value()
@@ -324,11 +330,26 @@ class Step5GrainExtract(QWidget):
         page = self.parent()
         if page and hasattr(page, "canvas"):
             page.canvas.set_annotations([])
+            # v1.2.0: 显示实际颗粒分割区域 (markers > 1),
+            # 不是 OTSU 原始 bin_mask。让视觉与颗粒数对得上
+            page.canvas.set_mask(grain_region_mask)
         QMessageBox.information(self, "提取完成",
             f"提取到 {result.grain_count_filtered} 个颗粒\n"
             f"平均粒径: {result.average_diameter_mm:.1f} mm\n"
-            f"粒级分布: {dict((k, v) for k, v in result.size_distribution.items() if v > 0)}")
-        self.extracted.emit(bin_mask)
+            f"粒级分布: {dict((k, v) for k, v in result.size_distribution.items() if v > 0)}\n"
+            f"\n提示: 距离山峰={int(self.dtr.value())}% {'较高,只识别大颗粒 (默认30%)' if self.dtr.value() > 40 else '正常' if self.dtr.value() >= 20 else '较低,可能识别过多小颗粒'}")
+        # v1.2.0 修复: emit 实际颗粒分割区域而不是 OTSU 二值图
+        # (避免 _on_mask_extracted 又把视觉覆盖回 bin_mask)
+        self.extracted.emit(grain_region_mask)
+        # v1.2.0 改进: 提取后自动跳到 Step 8 并重跑分析
+        # 用户反馈: 「重提取后看不到新数据」
+        # 之前要手动到 Step 8 点「自动分析」,现在自动完成
+        if page and hasattr(page, "goto_step") and hasattr(page, "step_panels"):
+            page.goto_step(7)  # Step 8 (0-based index 7)
+            if 7 < len(page.step_panels):
+                step8 = page.step_panels[7]
+                if hasattr(step8, "_run"):
+                    step8._run()
 
 
 # ============= 步骤 6: 颗粒编辑 =============
