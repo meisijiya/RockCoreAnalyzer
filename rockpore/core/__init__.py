@@ -53,6 +53,7 @@ from .grain_accuracy import (
     GrainAccuracyReport, evaluate_grain_accuracy,
     detect_grains_robust, compute_pixel_metrics, match_grains,
 )
+from .report_exporter import ReportExporter, SUPPORTED_FORMATS
 
 __all__ = [
     "Scale", "Calibration", "pixel_to_mm", "mm_to_pixel",
@@ -85,4 +86,5 @@ __all__ = [
     "make_granite_synthetic_grain",
     "GrainAccuracyReport", "evaluate_grain_accuracy",
     "detect_grains_robust", "match_grains",
+    "ReportExporter", "SUPPORTED_FORMATS",
 ]

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Dict, Optional
 
 import cv2
@@ -876,7 +877,7 @@ class Step10FractureReport(QWidget):
         title = QLabel("📄  报告生成")
         title.setObjectName("pageTitle")
         v.addWidget(title)
-        sub = QLabel("生成裂缝分析 HTML 报告")
+        sub = QLabel("生成裂缝分析报告 (支持 HTML/PDF/Excel/Word/CSV)")
         sub.setObjectName("pageSubtitle")
         v.addWidget(sub)
         # 报告预览/导出
@@ -895,7 +896,7 @@ class Step10FractureReport(QWidget):
         gen_btn.setMinimumHeight(40)
         gen_btn.clicked.connect(self._preview)
         h.addWidget(gen_btn)
-        save_btn = QPushButton("💾 保存 HTML")
+        save_btn = QPushButton("💾 保存报告")
         save_btn.setMinimumHeight(40)
         save_btn.clicked.connect(self._save)
         h.addWidget(save_btn)
@@ -934,6 +935,7 @@ class Step10FractureReport(QWidget):
         self.summary_label.setText("\n".join(lines))
 
     def _save(self):
+        """v1.2.0: 用 ReportExporter 导出多种格式 (HTML/PDF/XLSX/DOCX/TXT/CSV)."""
         ctx = self.ctx()
         result = ctx.get("analysis_result")
         image = ctx.get("image")
@@ -942,106 +944,80 @@ class Step10FractureReport(QWidget):
         if result is None:
             QMessageBox.warning(self, "提示", "请先完成裂缝分析(Step 8)")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存报告", "fracture_report.html",
-            "HTML 文件 (*.html);;所有文件 (*)",
+        from rockpore.core.report_exporter import ReportExporter, SUPPORTED_FORMATS
+        from rockpore.core.fracture import draw_fracture_annotations
+        # 构造标注图
+        try:
+            annotated = draw_fracture_annotations(image if image is not None else mask, result.fractures)
+        except Exception:
+            annotated = None
+        # 构造 exporter
+        info = ctx.get("info", {})
+        exporter = self._build_exporter(result, info, scale, annotated)
+        # 弹文件对话框
+        filters = ";;".join(meta["label"] for meta in SUPPORTED_FORMATS.values())
+        filters += ";;所有文件 (*)"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "保存报告", "fracture_report.html", filters,
         )
         if not path:
             return
-        from rockpore.core.report import generate_report, ReportData
-        from rockpore.core.fracture import draw_fracture_annotations
-        # 构造标注图
-        annotated = draw_fracture_annotations(image if image is not None else mask, result.fractures)
-        # 写入临时 png
-        import tempfile, os
-        tmp_png = os.path.join(tempfile.gettempdir(), "fracture_annotated.png")
-        cv2.imwrite(tmp_png, annotated)
-        # 复用通用 report 框架(简化: 使用 generate_report)
-        info = ctx.get("info", {})
-        project_name = info.get("project_name", "裂缝分析")
-        # 用一个最小化的 HTML 报告
-        from rockpore.core.fracture import draw_fracture_annotations as dfa
-        # 直接构造 HTML
-        html = self._build_html(result, info, annotated, scale)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(html)
-        QMessageBox.information(self, "保存成功", f"报告已保存到:\n{path}")
-        self.saved.emit(path)
+        # 推断格式
+        fmt_by_label = {meta["label"]: fmt for fmt, meta in SUPPORTED_FORMATS.items()}
+        fmt = fmt_by_label.get(selected_filter, "html")
+        ext = os.path.splitext(path)[1].lstrip(".").lower()
+        if ext in SUPPORTED_FORMATS:
+            fmt = ext
+        try:
+            exporter.export(fmt, path)
+            QMessageBox.information(self, "保存成功", f"报告已保存到:\n{path}")
+            self.saved.emit(path)
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"导出 {fmt.upper()} 失败:\n{e}")
 
-    def _build_html(self, result, info, annotated_image, scale):
-        """构造裂缝分析报告 HTML."""
-        import base64
-        # 把图像嵌入 base64
-        import cv2
-        _, buf = cv2.imencode(".png", annotated_image)
-        b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    def _build_exporter(self, result, info, scale, annotated_image):
+        """构造 ReportExporter."""
+        from rockpore.core.report_exporter import ReportExporter
+        info_dict = {
+            "项目名称": info.get("project_name", "(未填)"),
+            "样品编号": info.get("sample_id", "(未填)"),
+            "分析人员": info.get("operator", "(未填)"),
+            "标尺": f"{scale.pixels_per_unit:.3f} 像素/{scale.unit.value}" if scale else "(未设置)",
+        }
+        summary = {
+            "裂缝总数": f"{result.fracture_count} 条",
+            "大缝(≥10mm)": f"{result.width_distribution.get('大缝', 0)} 条",
+            "中缝(1-10mm)": f"{result.width_distribution.get('中缝', 0)} 条",
+            "小缝(<1mm)": f"{result.width_distribution.get('小缝', 0)} 条",
+            "报告级(≥0.1mm)": f"{result.fracture_count_report} 条",
+            "累计长度": f"{result.total_length_real:.2f} mm",
+            "平均宽度": f"{result.average_width_real:.3f} mm",
+            "最大长度": f"{result.max_length_real:.2f} mm",
+            "面密度": f"{result.areal_density:.4f} 1/mm",
+            "线密度": f"{result.linear_density:.3f} 1/mm",
+        }
+        headers = ["ID", "类型", "长度(mm)", "宽度(mm)", "倾角(°)", "分类", "开启度", "充填"]
         rows = []
         for f in result.fractures:
-            rows.append(
-                f"<tr><td>{f.id}</td><td>{f.fracture_type.value}</td>"
-                f"<td>{f.length_real:.2f}</td><td>{f.width_real:.3f}</td>"
-                f"<td>{f.orientation_deg:.1f}</td><td>{f.size_class}</td>"
-                f"<td>{f.openness.value}</td><td>{f.fill_status.value}</td></tr>"
-            )
-        html = f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="UTF-8">
-<title>裂缝分析报告 — {info.get('project_name', '未命名项目')}</title>
-<style>
-body {{ font-family: "Microsoft YaHei", "PingFang SC", sans-serif; margin: 30px; color: #1f2328; }}
-h1 {{ color: #2c5fa3; border-bottom: 3px solid #2c5fa3; padding-bottom: 10px; }}
-h2 {{ color: #2c5fa3; margin-top: 30px; }}
-.meta {{ background: #f6f8fa; padding: 15px; border-radius: 8px; }}
-.kpi-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0; }}
-.kpi {{ background: #e8f0fb; padding: 15px; border-radius: 8px; border-left: 4px solid #2c5fa3; }}
-.kpi-label {{ font-size: 12px; color: #57606a; }}
-.kpi-value {{ font-size: 24px; font-weight: bold; color: #2c5fa3; margin-top: 5px; }}
-table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-th, td {{ border: 1px solid #d0d7de; padding: 8px; text-align: center; font-size: 13px; }}
-th {{ background: #f6f8fa; color: #1f2328; font-weight: 600; }}
-tr:hover {{ background: #f6f8fa; }}
-img {{ max-width: 100%; border: 1px solid #d0d7de; border-radius: 6px; }}
-</style></head><body>
-<h1>📏 裂缝分析报告</h1>
-
-<div class="meta">
-  <p><b>项目名称:</b> {info.get('project_name', '(未填)')}</p>
-  <p><b>样品编号:</b> {info.get('sample_id', '(未填)')}</p>
-  <p><b>分析人员:</b> {info.get('operator', '(未填)')}</p>
-  <p><b>分析日期:</b> {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-  <p><b>标尺:</b> {scale.pixels_per_unit:.3f} 像素/{scale.unit.value}</p>
-</div>
-
-<h2>关键指标</h2>
-<div class="kpi-grid">
-  <div class="kpi"><div class="kpi-label">裂缝总数</div><div class="kpi-value">{result.fracture_count}</div></div>
-  <div class="kpi"><div class="kpi-label">报告级(≥0.1mm)</div><div class="kpi-value">{result.fracture_count_report}</div></div>
-  <div class="kpi"><div class="kpi-label">累计长度</div><div class="kpi-value">{result.total_length_real:.2f} mm</div></div>
-  <div class="kpi"><div class="kpi-label">平均宽度</div><div class="kpi-value">{result.average_width_real:.3f} mm</div></div>
-  <div class="kpi"><div class="kpi-label">面密度</div><div class="kpi-value">{result.areal_density:.4f} 1/mm</div></div>
-  <div class="kpi"><div class="kpi-label">线密度</div><div class="kpi-value">{result.linear_density:.3f} 1/mm</div></div>
-</div>
-
-<h2>宽度分布</h2>
-<table><tr><th>大缝(≥10mm)</th><th>中缝(1-10mm)</th><th>小缝(&lt;1mm)</th></tr>
-<tr><td>{result.width_distribution.get('大缝', 0)}</td>
-    <td>{result.width_distribution.get('中缝', 0)}</td>
-    <td>{result.width_distribution.get('小缝', 0)}</td></tr>
-</table>
-
-<h2>裂缝标注图</h2>
-<img src="data:image/png;base64,{b64}" alt="裂缝标注图">
-
-<h2>裂缝详细参数</h2>
-<table><tr><th>ID</th><th>类型</th><th>长度(mm)</th><th>宽度(mm)</th><th>倾角(°)</th><th>分类</th><th>开启度</th><th>充填</th></tr>
-{''.join(rows)}
-</table>
-
-<h2>备注</h2>
-<p>{info.get('notes', '(无)')}</p>
-
-<p style="margin-top: 40px; color: #57606a; font-size: 12px;">本报告由 岩心孔洞分析软件 自动生成</p>
-</body></html>"""
-        return html
+            rows.append([
+                f.id,
+                f.fracture_type.value,
+                f"{f.length_real:.2f}",
+                f"{f.width_real:.3f}",
+                f"{f.orientation_deg:.1f}",
+                f.size_class,
+                f.openness.value,
+                f.fill_status.value,
+            ])
+        return ReportExporter(
+            title="裂缝分析报告",
+            info=info_dict,
+            summary=summary,
+            headers=headers,
+            rows=rows,
+            annotated_image=annotated_image,
+            notes=info.get("notes", ""),
+        )
 
 
 # ============= FractureModule =============

@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Optional
 
 import cv2
 import numpy as np
+import os
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
@@ -820,7 +821,7 @@ class Step10Report(QWidget):
         title = QLabel("📄  生成报告")
         title.setObjectName("pageTitle")
         v.addWidget(title)
-        sub = QLabel("生成 HTML 格式的孔洞分析报告")
+        sub = QLabel("生成孔洞分析报告 (支持 HTML/PDF/Excel/Word/CSV/TXT)")
         sub.setObjectName("pageSubtitle")
         v.addWidget(sub)
         h = QHBoxLayout()
@@ -837,66 +838,102 @@ class Step10Report(QWidget):
         self.preview = QTextEdit()
         self.preview.setReadOnly(True)
         v.addWidget(self.preview)
-        self._html = None
+        self._exporter = None
 
     def _generate(self):
         ctx = self.ctx()
         if "analysis_result" not in ctx:
             QMessageBox.warning(self, "提示", "请先完成孔洞分析")
             return
-        from rockpore.core.report import ReportData, generate_report, _make_annotated_image
+        from rockpore.core.report import _make_annotated_image
+        from rockpore.core.report_exporter import ReportExporter
         result = ctx["analysis_result"]
         scale = ctx.get("scale")
         scale_info = f"{scale.pixels_per_unit:.3f} px/{'μm' if 'MICROMETER' in scale.unit.name else 'mm'}" if scale else "-"
-        annot = _make_annotated_image(ctx["image"], ctx.get("mask"), result)
+        try:
+            annot = _make_annotated_image(ctx["image"], ctx.get("mask"), result)
+        except Exception:
+            annot = None
         info = ctx.get("info", {})
-        data = ReportData(
-            project_name=info.get("project", ""),
-            sample_id=info.get("sample_id", ""),
-            analyst=info.get("analyst", ""),
-            image_path=ctx.get("image_path", ""),
-            image_size=(ctx["image"].shape[1], ctx["image"].shape[0]),
-            scale_info=scale_info,
-            remarks=info.get("remarks", ""),
-            analysis_result=result,
-            original_image=ctx["image"],
+        # 构造 ReportExporter
+        info_dict = {
+            "项目": info.get("project", ""),
+            "样品编号": info.get("sample_id", ""),
+            "分析人员": info.get("analyst", ""),
+            "图像": ctx.get("image_path", ""),
+            "标尺": scale_info,
+        }
+        summary = {
+            "孔洞总个数": f"{result.pore_count} 个",
+            "报告级(≥2mm)": f"{result.pore_count_report} 个",
+            "孔洞面孔率": f"{result.porosity * 100:.2f} %",
+            "平均等效直径": f"{result.average_diameter_real:.2f} mm",
+            "总孔洞面积": f"{result.total_pore_area_real:.2f} mm²",
+        }
+        headers = ["ID", "等效直径(mm)", "面积(mm²)", "形状因子", "分类", "圆度", "位置"]
+        rows = []
+        for p in result.pores:
+            rows.append([
+                p.id,
+                f"{p.diameter_real:.2f}",
+                f"{p.area_real:.2f}",
+                f"{p.shape_factor:.3f}",
+                p.size_class,
+                f"{p.circularity:.2f}",
+                f"({p.centroid[0]:.0f},{p.centroid[1]:.0f})",
+            ])
+        # 分类统计作为单独 section
+        size_dist_summary = {f"分类_{k}": f"{v} 个" for k, v in result.size_distribution.items()}
+        summary.update(size_dist_summary)
+        self._exporter = ReportExporter(
+            title="岩心孔洞分析报告",
+            info=info_dict,
+            summary=summary,
+            headers=headers,
+            rows=rows,
             annotated_image=annot,
+            notes=info.get("remarks", ""),
         )
-        self._html = generate_report(data)
         # 简单预览
-        summary = (
+        md = (
             f"# 岩心孔洞分析报告\n\n"
-            f"**项目:** {data.project_name or '-'}  \n"
-            f"**样品:** {data.sample_id or '-'}  \n"
-            f"**分析人员:** {data.analyst or '-'}  \n"
-            f"**图像:** {data.image_path or '-'}  \n"
-            f"**标尺:** {data.scale_info}  \n\n"
+            f"**项目:** {info.get('project', '-')}  \n"
+            f"**样品:** {info.get('sample_id', '-')}  \n"
+            f"**分析人员:** {info.get('analyst', '-')}  \n"
+            f"**标尺:** {scale_info}  \n\n"
             f"## 关键指标\n\n"
             f"- **孔洞总个数:** {result.pore_count} 个\n"
             f"- **报告级孔洞数(≥2mm):** {result.pore_count_report} 个\n"
             f"- **孔洞面孔率:** {result.porosity * 100:.2f} %\n"
             f"- **平均等效直径:** {result.average_diameter_real:.2f} mm\n"
-            f"- **总孔洞面积:** {result.total_pore_area_real:.2f} mm²\n\n"
-            f"## 分类统计\n\n"
+            f"- **总孔洞面积:** {result.total_pore_area_real:.2f} mm²\n"
         )
-        for k, v in result.size_distribution.items():
-            pct = v / max(1, result.pore_count) * 100
-            summary += f"- **{k}:** {v} 个 ({pct:.1f}%)\n"
-        self.preview.setMarkdown(summary)
-        self._data = data
-        QMessageBox.information(self, "成功", "报告已生成,可保存为 HTML")
+        self.preview.setMarkdown(md)
+        QMessageBox.information(self, "成功", "报告已生成,可保存为多格式文件")
 
     def _save(self):
-        if not self._html:
+        if self._exporter is None:
             self._generate()
-        if not self._html:
+        if self._exporter is None:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存报告", "report.html", "HTML 文件 (*.html)"
+        from rockpore.core.report_exporter import SUPPORTED_FORMATS
+        filters = ";;".join(meta["label"] for meta in SUPPORTED_FORMATS.values())
+        filters += ";;所有文件 (*)"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "保存报告", "pore_report.html", filters
         )
-        if path:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(self._html)
+        if not path:
+            return
+        fmt_by_label = {meta["label"]: fmt for fmt, meta in SUPPORTED_FORMATS.items()}
+        fmt = fmt_by_label.get(selected_filter, "html")
+        ext = os.path.splitext(path)[1].lstrip(".").lower()
+        if ext in SUPPORTED_FORMATS:
+            fmt = ext
+        try:
+            self._exporter.export(fmt, path)
+            QMessageBox.information(self, "保存成功", f"报告已保存到:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"导出 {fmt.upper()} 失败:\n{e}")
             QMessageBox.information(self, "保存成功", f"报告已保存到:\n{path}")
 
 

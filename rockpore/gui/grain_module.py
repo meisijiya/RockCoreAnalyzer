@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 import numpy as np
@@ -772,51 +773,83 @@ class Step10GrainReport(QWidget):
             QMessageBox.warning(self, "提示", "请先完成 Step 8 粒度分析")
             return
         info = ctx.get("info", {})
-        from rockpore.core.grain import compute_size_distribution_text
-        lines = [
-            "══ 岩石粒度分析报告 ══",
-            "",
-            f"井号: {info.get('well_name', '未录入')}",
-            f"深度: {info.get('depth', '未录入')}",
-            f"岩性: {info.get('rock_type', '未录入')}",
-            "",
-            "── 颗粒统计 ──",
-            f"颗粒总数: {result.grain_count_filtered} 颗",
-            f"平均粒径: {result.average_diameter_mm:.1f} mm",
-            f"中位粒径: {result.median_diameter_mm:.1f} mm",
-            f"最大粒径: {result.max_diameter_mm:.1f} mm",
-            f"颗粒总面积: {result.total_area_real:.0f} mm²",
-            f"平均圆度: {result.average_circularity:.3f}",
-            f"图像面积: {result.image_area_real:.0f} mm²",
-            "",
-            compute_size_distribution_text(result),
-            "",
-            "── 颗粒明细 (前 20 颗) ──",
-        ]
-        for g in result.grains[:20]:
-            lines.append(
-                f"  #{g.id}: {g.diameter_major_mm:.1f}mm, "
-                f"圆度={g.circularity:.2f}, "
-                f"密实度={g.solidity:.2f}, "
-                f"{g.size_class}"
-            )
-        if len(result.grains) > 20:
-            lines.append(f"  ... (共 {len(result.grains)} 颗)")
-        lines.append("")
-        lines.append(f"备注: {info.get('remarks', '无')}")
-        self.report_view.setPlainText("\n".join(lines))
+        # v1.2.0: 用 ReportExporter 构造数据,同时在 QTextBrowser 中显示纯文本预览
+        from rockpore.core.report_exporter import ReportExporter
+        exporter = self._build_exporter(result, info)
+        # 在预览框显示纯文本
+        self.report_view.setPlainText(exporter._build_text())
+        # 缓存 exporter 以供 _save 用
+        self._exporter = exporter
+
+    def _build_exporter(self, result, info):
+        """构造 ReportExporter (供 _generate 和 _save 共用)."""
+        from rockpore.core.report_exporter import ReportExporter
+        info_dict = {
+            "井号": info.get("well_name", "未录入"),
+            "深度": info.get("depth", "未录入"),
+            "岩性": info.get("rock_type", "未录入"),
+        }
+        # 粒级分布 (过滤掉 0 颗的)
+        size_dist_text = {k: v for k, v in result.size_distribution.items() if v > 0}
+        summary = {
+            "颗粒总数": f"{result.grain_count_filtered} 颗",
+            "平均粒径": f"{result.average_diameter_mm:.1f} mm",
+            "中位粒径": f"{result.median_diameter_mm:.1f} mm",
+            "最大粒径": f"{result.max_diameter_mm:.1f} mm",
+            "最小粒径": f"{result.min_diameter_mm:.1f} mm",
+            "平均圆度": f"{result.average_circularity:.3f}",
+            "颗粒总面积": f"{result.total_area_real:.0f} mm²",
+            "图像面积": f"{result.image_area_real:.0f} mm²",
+        }
+        # 粒级分布作为单独 section
+        headers = ["#", "粒径(mm)", "长轴(mm)", "面积(px²)", "圆度", "密实度", "长宽比", "粒级"]
+        rows = []
+        for g in result.grains:
+            rows.append([
+                g.id,
+                f"{g.diameter_mm:.2f}",
+                f"{g.diameter_major_mm:.2f}",
+                f"{g.area_px:.0f}",
+                f"{g.circularity:.3f}",
+                f"{g.solidity:.3f}",
+                f"{g.aspect_ratio:.2f}",
+                g.size_class,
+            ])
+        return ReportExporter(
+            title="岩石粒度分析报告",
+            info=info_dict,
+            summary=summary,
+            headers=headers,
+            rows=rows,
+            notes=info.get("remarks", ""),
+        )
 
     def _save(self):
-        text = self.report_view.toPlainText()
-        if not text:
+        if not hasattr(self, "_exporter") or self._exporter is None:
             QMessageBox.warning(self, "提示", "请先生成报告")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存报告", "粒度分析报告.txt",
-            "文本文件 (*.txt);;所有文件 (*)"
+        from rockpore.core.report_exporter import SUPPORTED_FORMATS
+        # 构造文件类型过滤器
+        filters = ";;".join(
+            f"{meta['label']}" for fmt, meta in SUPPORTED_FORMATS.items()
         )
-        if path:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(text)
+        filters += ";;所有文件 (*)"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "保存报告", "粒度分析报告.html", filters
+        )
+        if not path:
+            return
+        # 从 selected_filter 推断格式
+        # 反向:label → fmt
+        fmt_by_label = {meta["label"]: fmt for fmt, meta in SUPPORTED_FORMATS.items()}
+        fmt = fmt_by_label.get(selected_filter, "html")
+        # 或从扩展名推断
+        ext = os.path.splitext(path)[1].lstrip(".").lower()
+        if ext in SUPPORTED_FORMATS:
+            fmt = ext
+        try:
+            self._exporter.export(fmt, path)
             QMessageBox.information(self, "保存成功", f"报告已保存到:\n{path}")
             self.completed.emit()
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"导出 {fmt.upper()} 失败:\n{e}")

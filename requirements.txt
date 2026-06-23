@@ -14,5 +14,10 @@ PyQt5>=5.15.0
 # Visualization
 matplotlib>=3.5.0
 
+# Report export (v1.2.0)
+reportlab>=4.0.0      # PDF
+openpyxl>=3.0.0       # Excel XLSX
+python-docx>=1.0.0    # Word DOCX
+
 # Testing
 pytest>=7.0.0
