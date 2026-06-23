@@ -108,6 +108,9 @@ class CanvasView(QFrame):
         # 工具
         self._tool = CanvasTool.VIEW
         self._brush_radius = 12
+        # v1.1.5: 拖拽式擦除/添加状态
+        self._is_drawing: bool = False
+        self._last_stroke_pos: Optional[QPoint] = None
         # 构建 UI
         self._build_ui()
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -452,7 +455,13 @@ class _CanvasSurface(QWidget):
             self.last_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
         elif event.button() == Qt.LeftButton:
-            self._apply_tool(event.pos())
+            # v1.1.5: 拖拽式擦除/添加 - 记录起点并应用工具
+            if self.tool in (CanvasTool.ERASE, CanvasTool.ADD):
+                self._is_drawing = True
+                self._last_stroke_pos = self._screen_to_image(event.pos())
+                self._apply_tool(event.pos())
+            else:
+                self._apply_tool(event.pos())
 
     def mouseMoveEvent(self, event: QMouseEvent):
         # 更新位置标签
@@ -466,10 +475,31 @@ class _CanvasSurface(QWidget):
             self.offset = QPoint(self.offset.x() + dx, self.offset.y() + dy)
             self.last_pos = event.pos()
             self.update()
+        # v1.1.5: 拖拽式擦除/添加 - 鼠标移动时连续画
+        elif self._is_drawing and self.tool in (CanvasTool.ERASE, CanvasTool.ADD):
+            current_pos = self._screen_to_image(event.pos())
+            if current_pos is None:
+                return
+            # 用 cv2.line 连接上一个点和当前点(避免点之间有空隙)
+            if self._last_stroke_pos is not None:
+                self._apply_tool_with_line(self._last_stroke_pos, current_pos)
+            else:
+                self._apply_tool(event.pos())
+            self._last_stroke_pos = current_pos
+            # 触发重绘(显示笔刷预览圆)
+            self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() in (Qt.LeftButton, Qt.MiddleButton):
             self.last_pos = None
+            # v1.1.5: 拖拽结束 - 重置状态并触发 mask_modified
+            if self._is_drawing:
+                self._is_drawing = False
+                self._last_stroke_pos = None
+                # 通知画布外部 mask 已修改(确保最终状态被保存)
+                if self.parent_view._mask is not None:
+                    self.mask_modified.emit(self.parent_view._mask)
+                self.update()
             cursors = {
                 CanvasTool.VIEW: Qt.OpenHandCursor,
                 CanvasTool.PICK: Qt.PointingHandCursor,
@@ -543,6 +573,38 @@ class _CanvasSurface(QWidget):
                 cv2.circle(mask, (img_pos.x(), img_pos.y()), r, 255, -1)
             self.parent_view.set_mask(mask)
             self.mask_modified.emit(mask)
+
+    def _apply_tool_with_line(self, from_img_pos: QPoint, to_img_pos: QPoint):
+        """v1.1.5: 拖拽式涂抹 - 用 cv2.line 连接两个点(避免断点).
+
+        Args:
+            from_img_pos: 起点(图像坐标)
+            to_img_pos: 终点(图像坐标)
+        """
+        if self.image is None or self.parent_view._mask is None:
+            return
+        if self.tool not in (CanvasTool.ERASE, CanvasTool.ADD):
+            return
+        mask = self.parent_view._mask.copy()
+        r = self.brush_radius
+        # 用 thick=r 的 line 连接两个点,确保没有断点
+        if self.tool == CanvasTool.ERASE:
+            cv2.line(mask,
+                     (from_img_pos.x(), from_img_pos.y()),
+                     (to_img_pos.x(), to_img_pos.y()),
+                     0, r * 2, cv2.LINE_AA)
+            # 起止点也画圆(防止快速拖动漏点)
+            cv2.circle(mask, (from_img_pos.x(), from_img_pos.y()), r, 0, -1)
+            cv2.circle(mask, (to_img_pos.x(), to_img_pos.y()), r, 0, -1)
+        else:  # ADD
+            cv2.line(mask,
+                     (from_img_pos.x(), from_img_pos.y()),
+                     (to_img_pos.x(), to_img_pos.y()),
+                     255, r * 2, cv2.LINE_AA)
+            cv2.circle(mask, (from_img_pos.x(), from_img_pos.y()), r, 255, -1)
+            cv2.circle(mask, (to_img_pos.x(), to_img_pos.y()), r, 255, -1)
+        self.parent_view.set_mask(mask)
+        # 注意: 拖拽过程中不频繁发送 mask_modified 信号,等 mouseReleaseEvent 一次性发送
 
     def _center_image(self):
         if self.image is None:
@@ -622,3 +684,20 @@ class _CanvasSurface(QWidget):
                 painter.setPen(pen)
                 painter.drawLine(mx, 0, mx, self.height())
                 painter.drawLine(0, my, self.width(), my)
+        # v1.1.5: 笔刷预览圆圈 (ERASE/ADD 工具时显示当前笔刷大小)
+        if self.tool in (CanvasTool.ERASE, CanvasTool.ADD):
+            mx, my = self.mapFromGlobal(QCursor.pos())
+            if self.rect().contains(QPoint(mx, my)):
+                brush_screen_radius = max(2, int(self.brush_radius * self.scale))
+                # 笔刷颜色: 擦除=红色虚线, 添加=绿色虚线
+                if self.tool == CanvasTool.ERASE:
+                    color = QColor(255, 80, 80, 220)  # 红色
+                else:
+                    color = QColor(80, 220, 80, 220)  # 绿色
+                pen = QPen(color, 2, Qt.DashLine)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawEllipse(QPoint(mx, my), brush_screen_radius, brush_screen_radius)
+                # 中心十字
+                painter.drawLine(mx - 4, my, mx + 4, my)
+                painter.drawLine(mx, my - 4, mx, my + 4)
