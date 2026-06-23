@@ -39,8 +39,8 @@ HELP_CONTENT = {
 <table border="1" cellpadding="6" style="border-collapse: collapse;">
 <tr><th>模块</th><th>说明</th><th>状态</th></tr>
 <tr><td>🕳 孔洞分析</td><td>识别岩心孔洞并计算面积、直径、面孔率</td><td>✅ 已实现</td></tr>
-<tr><td>📏 裂缝分析</td><td>识别裂缝并计算长度、宽度、密度</td><td>🚧 预留接口</td></tr>
-<tr><td>⚪ 粒度分析</td><td>识别颗粒并计算粒度分布</td><td>🚧 预留接口</td></tr>
+<tr><td>📏 裂缝分析</td><td>识别裂缝并计算长度、宽度、密度</td><td>✅ v1.1.5</td></tr>
+<tr><td>⚪ 粒度分析</td><td>识别颗粒并计算粒度分布</td><td>✅ v1.2.0</td></tr>
 </table>
 """,
     "快捷键": """

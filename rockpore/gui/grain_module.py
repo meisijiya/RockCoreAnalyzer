@@ -1,24 +1,29 @@
-"""粒度分析模块 - 预留接口.
+"""粒度分析模块 - 完整 10 步工作流.
 
-后续实现 TODO:
-- 步骤 5: 颗粒分割 (距离变换 + 分水岭)
-- 步骤 6: 边界修正
-- 步骤 7: 粒级筛选
-- 步骤 8: 粒度参数计算 (均值/分选/偏度)
+实现:
+- Step 1: 打开图像 (复用 Step1OpenImage)
+- Step 2: 启动分析
+- Step 3: 标尺选择 (复用 Step3Scale)
+- Step 4: 图像预处理
+- Step 5: 颗粒提取 (OTSU + 距离变换 + 分水岭)
+- Step 6: 颗粒编辑 (拖拽式擦除/添加)
+- Step 7: 分析参数 (粒径筛选)
+- Step 8: 粒度统计 (表格 + 统计参数)
+- Step 9: 基础信息
+- Step 10: 报告生成
 """
-
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict
 
 import numpy as np
 
-from .module_base import AnalysisModule, make_default_grain_steps
-from .pore_module import StepPlaceholder
+from .module_base import AnalysisModule, make_default_grain_steps, StepDefinition
+from .pore_module import StepPlaceholder, Step1OpenImage, Step3Scale
 
 
 class GrainModule(AnalysisModule):
-    """粒度分析模块(预留接口,后续实现)."""
+    """粒度分析模块 (距离变换 + 分水岭)."""
     name = "粒度分析"
     icon = "⚪"
     description = "识别颗粒并计算粒度分布、粒度参数"
@@ -31,24 +36,697 @@ class GrainModule(AnalysisModule):
         return self._steps
 
     def create_step_panel(self, step_idx: int, parent=None):
-        return StepPlaceholder(
-            f"粒度分析 - 步骤 {step_idx + 1}",
-            "🚧 粒度分析模块正在开发中。\n\n"
-            "该模块将提供以下能力:\n"
-            "• 颗粒自动检测\n"
-            "• 距离变换 + 分水岭分割\n"
-            "• 粒度分布直方图\n"
-            "• 粒度参数 (均值/分选/偏度/峰度)\n"
-            "• 沉积环境判别\n\n"
-            "请使用「孔洞分析」Tab 体验完整功能。",
-            "🚧"
-        )
+        page = parent
+
+        def ctx_getter():
+            return page.context
+
+        idx = step_idx + 1  # 0-based -> 1-based
+        if idx == 1:
+            return Step1OpenImage(ctx_getter, parent)
+        if idx == 2:
+            return StepPlaceholder(
+                "启动粒度分析",
+                "本模块已启动,接下来请按左侧 10 步流程操作。\n\n"
+                "建议路径:\n1. 打开图像 → 2. (本步) → 3. 设置标尺 → 4. 预处理\n"
+                "→ 5. 颗粒提取 → 6. 颗粒编辑 → 7. 参数 → 8. 分析 → 9. 信息 → 10. 报告",
+                "🚀"
+            )
+        if idx == 3:
+            return Step3Scale(ctx_getter, parent)
+        if idx == 4:
+            return Step4GrainPreprocess(ctx_getter, parent)
+        if idx == 5:
+            return Step5GrainExtract(ctx_getter, parent)
+        if idx == 6:
+            return Step6GrainEdit(ctx_getter, parent)
+        if idx == 7:
+            return Step7GrainParams(ctx_getter, parent)
+        if idx == 8:
+            return Step8GrainAnalyze(ctx_getter, parent)
+        if idx == 9:
+            return Step9GrainInfo(ctx_getter, parent)
+        if idx == 10:
+            return Step10GrainReport(ctx_getter, parent)
+        return StepPlaceholder(f"步骤 {idx}", "该步骤内容待补充", "📌")
 
     def run_step(self, step_idx: int, context: dict) -> dict:
         return {}
 
     def analyze(self, image, scale, context: dict) -> Any:
-        raise NotImplementedError("粒度分析模块待实现")
+        """完整流程: 检测 + 分析."""
+        from rockpore.core.grain import GrainParams, detect_grain_mask, analyze_grains
+        params = GrainParams(
+            blur_kernel=context.get("grain_blur", 7),
+            morph_close=context.get("grain_morph_close", 7),
+            morph_open=context.get("grain_morph_open", 3),
+            min_area_px=context.get("grain_min_area", 200),
+            distance_threshold_ratio=context.get("grain_dtr", 0.30),
+        )
+        mask = context.get("mask")
+        if mask is None:
+            mask, _ = detect_grain_mask(image, params)
+        result, _, markers = analyze_grains(image, scale, params, mask=mask)
+        return {"mask": mask, "result": result, "markers": markers}
 
     def build_report_data(self, context: dict) -> dict:
-        return {}
+        return {
+            "image": context.get("image"),
+            "mask": context.get("mask"),
+            "result": context.get("analysis_result"),
+            "info": context.get("info", {}),
+        }
+
+
+# ============= 步骤 4: 图像预处理 =============
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QSpinBox, QComboBox, QFormLayout, QMessageBox,
+)
+from PyQt5.QtCore import pyqtSignal, Qt
+from .teaching_panel import Card
+import cv2
+
+
+class Step4GrainPreprocess(QWidget):
+    """步骤 4: 粒度图像预处理."""
+    completed = pyqtSignal()
+
+    def __init__(self, ctx_getter, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx_getter
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+        title = QLabel("🔧  图像预处理")
+        title.setObjectName("pageTitle")
+        v.addWidget(title)
+        sub = QLabel("增强颗粒与基质的对比度")
+        sub.setObjectName("pageSubtitle")
+        v.addWidget(sub)
+        # 说明卡片
+        teach_card = Card("info")
+        teach_card.add_title("预处理目的")
+        teach_card.add_content(
+            "将浅色矿物颗粒与深色基质分离。\n\n"
+            "方法: CLAHE 局部直方图均衡化 + 可选高斯模糊。\n\n"
+            "• CLAHE: 增强局部对比度,让颗粒边界更清晰\n"
+            "• 模糊: 平滑颗粒内部纹理,避免过分割\n\n"
+            "地质意义: 花岗岩/砂岩的颗粒边界由深色矿物(黑云母/角闪石)勾勒,预处理需保持边界完整。"
+        )
+        v.addWidget(teach_card)
+        # 参数卡片
+        param_card = Card("tip")
+        cv_layout = param_card._layout
+        form = QFormLayout()
+        self.clahe_clip = QSpinBox()
+        self.clahe_clip.setRange(1, 10)
+        self.clahe_clip.setValue(2)
+        self.clahe_clip.setSuffix(" (CLAHE 裁切限值)")
+        self.clahe_clip.setMinimumWidth(140)
+        form.addRow("CLAHE 增强:", self.clahe_clip)
+        self.blur_kernel = QSpinBox()
+        self.blur_kernel.setRange(0, 25)
+        self.blur_kernel.setValue(7)
+        self.blur_kernel.setSuffix(" px (模糊核大小, 0=不模糊)")
+        self.blur_kernel.setMinimumWidth(140)
+        form.addRow("高斯模糊:", self.blur_kernel)
+        cv_layout.addLayout(form)
+        v.addWidget(param_card)
+        # 预览按钮
+        h = QHBoxLayout()
+        preview_btn = QPushButton("👁 预览预处理")
+        preview_btn.setObjectName("primaryButton")
+        preview_btn.setMinimumHeight(36)
+        preview_btn.clicked.connect(self._preview)
+        h.addWidget(preview_btn)
+        h.addStretch(1)
+        v.addLayout(h)
+        v.addStretch(1)
+
+    def _preview(self):
+        ctx = self.ctx()
+        image = ctx.get("image")
+        if image is None:
+            QMessageBox.warning(self, "提示", "请先打开图像(Step 1)")
+            return
+        clahe = cv2.createCLAHE(clipLimit=self.clahe_clip.value(), tileGridSize=(8, 8))
+        if image.ndim == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image.copy()
+        gray = clahe.apply(gray)
+        bk = self.blur_kernel.value()
+        if bk > 0:
+            gray = cv2.GaussianBlur(gray, (bk | 1, bk | 1), 0)
+        # 存预处理图
+        ctx["preprocessed"] = gray
+        ctx["grain_blur"] = self.blur_kernel.value()
+        cv2.imwrite("/tmp/grain_preview.png", gray)
+        QMessageBox.information(self, "预处理完成",
+            f"CLAHE(clip={self.clahe_clip.value()}) + 高斯模糊(核={self.blur_kernel.value()}) 完成\n预览已保存: /tmp/grain_preview.png")
+        self.completed.emit()
+
+
+# ============= 步骤 5: 颗粒提取 =============
+class Step5GrainExtract(QWidget):
+    """步骤 5: 颗粒提取 (OTSU + 距离变换 + 分水岭)."""
+    extracted = pyqtSignal(np.ndarray)
+
+    def __init__(self, ctx_getter, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx_getter
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+        title = QLabel("🔬  颗粒提取")
+        title.setObjectName("pageTitle")
+        v.addWidget(title)
+        sub = QLabel("OTSU 正向阈值 + 距离变换 + 分水岭分割")
+        sub.setObjectName("pageSubtitle")
+        v.addWidget(sub)
+        # 说明卡片
+        teach_card = Card("info")
+        teach_card.add_title("提取原理")
+        teach_card.add_content(
+            "算法流程:\n"
+            "1. OTSU 正向阈值: 浅色矿物颗粒(亮) → 255(前景)\n"
+            "2. 闭运算: 连接断裂的颗粒边界\n"
+            "3. 距离变换: 计算每个像素到边界的距离\n"
+            "4. 局部最大值: 找颗粒中心点\n"
+            "5. 分水岭: 从中心向边界扩展,分离粘连颗粒\n\n"
+            "适用: 花岗岩/砂岩等颗粒支撑岩石。"
+        )
+        v.addWidget(teach_card)
+        # 参数
+        param_card = Card("tip")
+        cv_layout = param_card._layout
+        form = QFormLayout()
+        self.blur_kernel = QSpinBox()
+        self.blur_kernel.setRange(0, 25)
+        self.blur_kernel.setValue(7)
+        self.blur_kernel.setSuffix(" (模糊核)")
+        self.blur_kernel.setMinimumWidth(140)
+        form.addRow("高斯模糊:", self.blur_kernel)
+        self.morph_close = QSpinBox()
+        self.morph_close.setRange(0, 20)
+        self.morph_close.setValue(7)
+        self.morph_close.setSuffix(" (闭运算)")
+        self.morph_close.setMinimumWidth(140)
+        form.addRow("闭运算:", self.morph_close)
+        self.morph_open = QSpinBox()
+        self.morph_open.setRange(0, 10)
+        self.morph_open.setValue(3)
+        self.morph_open.setSuffix(" (开运算)")
+        self.morph_open.setMinimumWidth(140)
+        form.addRow("开运算:", self.morph_open)
+        self.min_area = QSpinBox()
+        self.min_area.setRange(10, 5000)
+        self.min_area.setValue(200)
+        self.min_area.setSuffix(" px² (最小面积)")
+        self.min_area.setMinimumWidth(140)
+        form.addRow("最小面积:", self.min_area)
+        self.dtr = QSpinBox()
+        self.dtr.setRange(5, 80)
+        self.dtr.setValue(30)
+        self.dtr.setSuffix(" % (山峰阈值)")
+        self.dtr.setMinimumWidth(140)
+        form.addRow("距离山峰:", self.dtr)
+        cv_layout.addLayout(form)
+        v.addWidget(param_card)
+        # 按钮
+        h = QHBoxLayout()
+        extract_btn = QPushButton("▶ 提取颗粒")
+        extract_btn.setObjectName("primaryButton")
+        extract_btn.setMinimumHeight(40)
+        extract_btn.clicked.connect(self._extract)
+        h.addWidget(extract_btn)
+        h.addStretch(1)
+        v.addLayout(h)
+        v.addStretch(1)
+
+    def _extract(self):
+        ctx = self.ctx()
+        image = ctx.get("image")
+        if image is None:
+            QMessageBox.warning(self, "提示", "请先打开图像(Step 1)")
+            return
+        from rockpore.core.grain import GrainParams, detect_grain_mask, analyze_grains
+        from rockpore.core.calibration import Scale
+
+        scale = ctx.get("scale", Scale(pixels_per_unit=8.0, unit='mm'))
+        params = GrainParams(
+            blur_kernel=self.blur_kernel.value(),
+            morph_close=self.morph_close.value(),
+            morph_open=self.morph_open.value(),
+            min_area_px=self.min_area.value(),
+            distance_threshold_ratio=self.dtr.value() / 100.0,
+        )
+        bin_mask, _ = detect_grain_mask(image, params)
+        result, _, markers = analyze_grains(image, scale, params, mask=bin_mask)
+        ctx["mask"] = bin_mask
+        ctx["markers"] = markers
+        ctx["grain_params"] = params
+        ctx["grain_blur"] = self.blur_kernel.value()
+        ctx["grain_morph_close"] = self.morph_close.value()
+        ctx["grain_morph_open"] = self.morph_open.value()
+        ctx["grain_min_area"] = self.min_area.value()
+        ctx["grain_dtr"] = self.dtr.value() / 100.0
+        QMessageBox.information(self, "提取完成",
+            f"提取到 {result.grain_count_filtered} 个颗粒\n"
+            f"平均粒径: {result.average_diameter_mm:.1f} mm\n"
+            f"粒级分布: {dict((k, v) for k, v in result.size_distribution.items() if v > 0)}")
+        self.extracted.emit(bin_mask)
+
+
+# ============= 步骤 6: 颗粒编辑 =============
+class Step6GrainEdit(QWidget):
+    """步骤 6: 颗粒边界编辑 (拖拽式)."""
+    edited = pyqtSignal(np.ndarray)
+
+    def __init__(self, ctx_getter, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx_getter
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+        title = QLabel("🛠  颗粒编辑")
+        title.setObjectName("pageTitle")
+        v.addWidget(title)
+        sub = QLabel("用橡皮擦/添加工具精细调整颗粒区域")
+        sub.setObjectName("pageSubtitle")
+        v.addWidget(sub)
+        card = Card("info")
+        card.add_content(
+            "💡 编辑只影响 Step 8 的颗粒分析,不触发 Step 5 重新提取。\n\n"
+            "操作方法:\n"
+            "① 在画布顶部工具栏选「🧹 擦除」或「➕ 添加」\n"
+            "② 在画布上按住鼠标拖拽涂抹修改颗粒区域\n"
+            "③ 调整下方形态学参数(可选)\n"
+            "④ 返回 Step 8 重新分析"
+        )
+        v.addWidget(card)
+        # 形态学参数
+        morph_card = Card("tip")
+        cv_layout = morph_card._layout
+        form = QFormLayout()
+        self.morph_op = QComboBox()
+        self.morph_op.addItems([
+            "闭运算(连接相邻颗粒)",
+            "开运算(去除小噪点)",
+            "膨胀(扩大颗粒)",
+            "腐蚀(缩小颗粒)",
+        ])
+        form.addRow("操作:", self.morph_op)
+        self.kernel_size = QSpinBox()
+        self.kernel_size.setRange(1, 15)
+        self.kernel_size.setValue(3)
+        self.kernel_size.setSuffix(" px (核大小)")
+        form.addRow(self.kernel_size)
+        apply_btn = QPushButton("🔧 应用形态学")
+        apply_btn.setMinimumHeight(36)
+        apply_btn.clicked.connect(self._apply_morph)
+        form.addRow(apply_btn)
+        cv_layout.addLayout(form)
+        v.addWidget(morph_card)
+        v.addStretch(1)
+
+    def _apply_morph(self):
+        ctx = self.ctx()
+        mask = ctx.get("mask")
+        if mask is None:
+            QMessageBox.warning(self, "提示", "请先提取颗粒(Step 5)")
+            return
+        ksize = self.kernel_size.value()
+        if ksize <= 0:
+            ksize = 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (ksize, ksize))
+        op = self.morph_op.currentText()
+        if "闭运算" in op:
+            new_mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        elif "开运算" in op:
+            new_mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        elif "膨胀" in op:
+            new_mask = cv2.dilate(mask, kernel)
+        else:
+            new_mask = cv2.erode(mask, kernel)
+        ctx["mask"] = new_mask
+        ctx["mask_dirty"] = True
+        self.edited.emit(new_mask)
+
+
+# ============= 步骤 7: 分析参数 =============
+class Step7GrainParams(QWidget):
+    """步骤 7: 粒度分析参数 (粒径筛选)."""
+    params_changed = pyqtSignal()
+
+    def __init__(self, ctx_getter, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx_getter
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+        title = QLabel("⚙  分析参数")
+        title.setObjectName("pageTitle")
+        v.addWidget(title)
+        sub = QLabel("调整粒度分析的阈值参数(修改后 Step 8 自动重算)")
+        sub.setObjectName("pageSubtitle")
+        v.addWidget(sub)
+        # 说明卡片
+        card = Card("info")
+        card.add_title("参数说明")
+        card.add_content(
+            "粒径筛选:\n"
+            "• 最小粒径(mm): 小于此值的颗粒不计入统计\n"
+            "• 最大粒径(mm): 大于此值的颗粒不计入统计\n\n"
+            "密实度/圆度筛选:\n"
+            "• 最小密实度: 排除不规则形状(密实度=面积/凸包面积)\n"
+            "• 最小圆度: 排除过扁/过长颗粒(圆度=4πA/P²)\n\n"
+            "地质意义: 粒度分析关注颗粒粒径分布,密实度/圆度反映搬运距离与磨圆程度。"
+        )
+        v.addWidget(card)
+        card = Card("tip")
+        cv_layout = card._layout
+        form = QFormLayout()
+        self.min_diameter = QSpinBox()
+        self.min_diameter.setRange(0, 1000)
+        self.min_diameter.setValue(1)
+        self.min_diameter.setSuffix(" mm (最小粒径)")
+        self.min_diameter.setMinimumWidth(140)
+        form.addRow("最小粒径:", self.min_diameter)
+        self.max_diameter = QSpinBox()
+        self.max_diameter.setRange(1, 5000)
+        self.max_diameter.setValue(5000)
+        self.max_diameter.setSuffix(" mm (最大粒径)")
+        self.max_diameter.setMinimumWidth(140)
+        form.addRow("最大粒径:", self.max_diameter)
+        self.min_solidity = QSpinBox()
+        self.min_solidity.setRange(1, 99)
+        self.min_solidity.setValue(40)
+        self.min_solidity.setSuffix(" % (最小密实度)")
+        self.min_solidity.setMinimumWidth(140)
+        form.addRow("最小密实度:", self.min_solidity)
+        self.min_circularity = QSpinBox()
+        self.min_circularity.setRange(1, 99)
+        self.min_circularity.setValue(20)
+        self.min_circularity.setSuffix(" % (最小圆度)")
+        self.min_circularity.setMinimumWidth(140)
+        form.addRow("最小圆度:", self.min_circularity)
+        cv_layout.addLayout(form)
+        v.addWidget(card)
+        # 应用按钮
+        apply_btn = QPushButton("✅ 应用参数")
+        apply_btn.setObjectName("primaryButton")
+        apply_btn.setMinimumHeight(36)
+        apply_btn.clicked.connect(self._apply)
+        v.addWidget(apply_btn)
+        v.addStretch(1)
+
+    def _apply(self):
+        ctx = self.ctx()
+        ctx["grain_min_diameter_mm"] = self.min_diameter.value()
+        ctx["grain_max_diameter_mm"] = self.max_diameter.value()
+        ctx["grain_min_solidity"] = self.min_solidity.value() / 100.0
+        ctx["grain_min_circularity"] = self.min_circularity.value() / 100.0
+        self.params_changed.emit()
+
+
+# ============= 步骤 8: 粒度统计 =============
+from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+
+class Step8GrainAnalyze(QWidget):
+    """步骤 8: 粒度统计 (表格 + 统计参数)."""
+    analyzed = pyqtSignal(object)
+    grain_selected = pyqtSignal(int)
+
+    def __init__(self, ctx_getter, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx_getter
+        self._grains_by_id: Dict[int, Any] = {}
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+        title = QLabel("📊  粒度统计")
+        title.setObjectName("pageTitle")
+        v.addWidget(title)
+        sub = QLabel("计算颗粒尺寸、圆度、密实度等定量参数")
+        sub.setObjectName("pageSubtitle")
+        v.addWidget(sub)
+        # 按钮行
+        h = QHBoxLayout()
+        run_btn = QPushButton("▶ 自动分析")
+        run_btn.setObjectName("primaryButton")
+        run_btn.setMinimumHeight(36)
+        run_btn.clicked.connect(self._run)
+        h.addWidget(run_btn)
+        h.addStretch(1)
+        v.addLayout(h)
+        # 统计卡片
+        from PyQt5.QtWidgets import QGridLayout, QFrame
+        cards_grid = QGridLayout()
+        cards_grid.setSpacing(10)
+        self._cards = {}
+        for i, (key, label, unit) in enumerate([
+            ("grain_count", "颗粒总数", "颗"),
+            ("avg_diameter", "平均粒径", "mm"),
+            ("median_diameter", "中位粒径", "mm"),
+            ("max_diameter", "最大粒径", "mm"),
+            ("total_area", "颗粒总面积", "mm²"),
+            ("avg_circularity", "平均圆度", ""),
+        ]):
+            r, c = divmod(i, 3)
+            frame = QFrame()
+            frame.setObjectName("dataCard")
+            frame.setMinimumHeight(70)
+            fv = QVBoxLayout(frame)
+            fv.setContentsMargins(8, 4, 8, 4)
+            title_lbl = QLabel(label)
+            title_lbl.setStyleSheet("color: #57606a; font-size: 11px;")
+            fv.addWidget(title_lbl)
+            val_lbl = QLabel("-")
+            val_lbl.setStyleSheet("color: #2c5fa3; font-size: 16px; font-weight: bold;")
+            fv.addWidget(val_lbl)
+            unit_lbl = QLabel(unit)
+            unit_lbl.setStyleSheet("color: #8b949e; font-size: 10px;")
+            fv.addWidget(unit_lbl)
+            cards_grid.addWidget(frame, r, c)
+            self._cards[key] = val_lbl
+        v.addLayout(cards_grid)
+        # 表格
+        self.table = QTableWidget()
+        self.table.setColumnCount(9)
+        self.table.setHorizontalHeaderLabels([
+            "#", "粒径(mm)", "长轴(mm)", "面积(px²)", "圆度", "密实度",
+            "长宽比", "粒级", "质心"
+        ])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setMinimumHeight(250)
+        self.table.itemSelectionChanged.connect(self._on_selection)
+        v.addWidget(self.table, 1)
+
+    def _run(self):
+        ctx = self.ctx()
+        image = ctx.get("image")
+        mask = ctx.get("mask")
+        if image is None or mask is None:
+            QMessageBox.warning(self, "提示", "请先完成 Step 5 颗粒提取")
+            return
+        from rockpore.core.grain import GrainParams, analyze_grains
+        from rockpore.core.calibration import Scale
+
+        scale = ctx.get("scale", Scale(pixels_per_unit=8.0, unit='mm'))
+        params = GrainParams(
+            blur_kernel=ctx.get("grain_blur", 7),
+            morph_close=ctx.get("grain_morph_close", 7),
+            morph_open=ctx.get("grain_morph_open", 3),
+            min_area_px=ctx.get("grain_min_area", 200),
+            distance_threshold_ratio=ctx.get("grain_dtr", 0.30),
+            min_solidity=ctx.get("grain_min_solidity", 0.4),
+            circularity_min=ctx.get("grain_min_circularity", 0.2),
+        )
+        result, _, _ = analyze_grains(image, scale, params, mask=mask)
+        ctx["analysis_result"] = result
+        # 显示统计卡片
+        self._cards["grain_count"].setText(str(result.grain_count_filtered))
+        self._cards["avg_diameter"].setText(f"{result.average_diameter_mm:.1f}")
+        self._cards["median_diameter"].setText(f"{result.median_diameter_mm:.1f}")
+        self._cards["max_diameter"].setText(f"{result.max_diameter_mm:.1f}")
+        self._cards["total_area"].setText(f"{result.total_area_real:.0f}")
+        self._cards["avg_circularity"].setText(f"{result.average_circularity:.2f}")
+        # 填充表格
+        self._grains_by_id.clear()
+        self.table.setRowCount(len(result.grains))
+        for row, g in enumerate(result.grains):
+            self._grains_by_id[g.id] = g
+            self.table.setItem(row, 0, QTableWidgetItem(str(g.id)))
+            self.table.setItem(row, 1, QTableWidgetItem(f"{g.diameter_major_mm:.1f}"))
+            self.table.setItem(row, 2, QTableWidgetItem(f"{g.diameter_major_mm:.1f}"))
+            self.table.setItem(row, 3, QTableWidgetItem(f"{g.area_px:.0f}"))
+            self.table.setItem(row, 4, QTableWidgetItem(f"{g.circularity:.3f}"))
+            self.table.setItem(row, 5, QTableWidgetItem(f"{g.solidity:.3f}"))
+            self.table.setItem(row, 6, QTableWidgetItem(f"{g.aspect_ratio:.2f}"))
+            self.table.setItem(row, 7, QTableWidgetItem(g.size_class))
+            self.table.setItem(row, 8, QTableWidgetItem(f"({g.centroid[0]:.0f},{g.centroid[1]:.0f})"))
+        self.analyzed.emit(result)
+
+    def _on_selection(self):
+        rows = set(idx.row() for idx in self.table.selectedIndexes())
+        if rows:
+            import random
+            gid = list(rows)[0] + 1
+            self.grain_selected.emit(gid)
+
+
+# ============= 步骤 9: 基础信息 =============
+from PyQt5.QtWidgets import QLineEdit, QTextEdit
+
+
+class Step9GrainInfo(QWidget):
+    """步骤 9: 基础信息录入."""
+    completed = pyqtSignal()
+
+    def __init__(self, ctx_getter, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx_getter
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+        title = QLabel("📋  基础信息")
+        title.setObjectName("pageTitle")
+        v.addWidget(title)
+        sub = QLabel("录入样品元数据")
+        sub.setObjectName("pageSubtitle")
+        v.addWidget(sub)
+        card = Card("info")
+        cv_layout = card._layout
+        form = QFormLayout()
+        self.well_name = QLineEdit()
+        self.well_name.setPlaceholderText("如: 长页地1井")
+        form.addRow("井号:", self.well_name)
+        self.depth = QLineEdit()
+        self.depth.setPlaceholderText("如: 1234.5 m")
+        form.addRow("深度:", self.depth)
+        self.rock_type = QLineEdit()
+        self.rock_type.setPlaceholderText("如: 中粒花岗岩")
+        form.addRow("岩性:", self.rock_type)
+        self.remarks = QTextEdit()
+        self.remarks.setPlaceholderText("备注信息...")
+        self.remarks.setMaximumHeight(80)
+        form.addRow("备注:", self.remarks)
+        cv_layout.addLayout(form)
+        v.addWidget(card)
+        save_btn = QPushButton("💾 保存信息")
+        save_btn.setObjectName("primaryButton")
+        save_btn.setMinimumHeight(36)
+        save_btn.clicked.connect(self._save)
+        v.addWidget(save_btn)
+        v.addStretch(1)
+
+    def _save(self):
+        ctx = self.ctx()
+        ctx["info"] = {
+            "well_name": self.well_name.text(),
+            "depth": self.depth.text(),
+            "rock_type": self.rock_type.text(),
+            "remarks": self.remarks.toPlainText(),
+        }
+        self.completed.emit()
+
+
+# ============= 步骤 10: 报告生成 =============
+from PyQt5.QtWidgets import QTextBrowser, QFileDialog
+
+
+class Step10GrainReport(QWidget):
+    """步骤 10: 生成粒度分析报告."""
+    completed = pyqtSignal()
+
+    def __init__(self, ctx_getter, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx_getter
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+        title = QLabel("📄  报告生成")
+        title.setObjectName("pageTitle")
+        v.addWidget(title)
+        sub = QLabel("生成标准化粒度分析报告")
+        sub.setObjectName("pageSubtitle")
+        v.addWidget(sub)
+        # 按钮行
+        h = QHBoxLayout()
+        generate_btn = QPushButton("📝 生成报告")
+        generate_btn.setObjectName("primaryButton")
+        generate_btn.setMinimumHeight(36)
+        generate_btn.clicked.connect(self._generate)
+        h.addWidget(generate_btn)
+        save_btn = QPushButton("💾 保存报告")
+        save_btn.setMinimumHeight(36)
+        save_btn.clicked.connect(self._save)
+        h.addWidget(save_btn)
+        h.addStretch(1)
+        v.addLayout(h)
+        # 报告预览
+        self.report_view = QTextBrowser()
+        self.report_view.setMinimumHeight(300)
+        v.addWidget(self.report_view, 1)
+
+    def _generate(self):
+        ctx = self.ctx()
+        result = ctx.get("analysis_result")
+        if result is None:
+            QMessageBox.warning(self, "提示", "请先完成 Step 8 粒度分析")
+            return
+        info = ctx.get("info", {})
+        from rockpore.core.grain import compute_size_distribution_text
+        lines = [
+            "══ 岩石粒度分析报告 ══",
+            "",
+            f"井号: {info.get('well_name', '未录入')}",
+            f"深度: {info.get('depth', '未录入')}",
+            f"岩性: {info.get('rock_type', '未录入')}",
+            "",
+            "── 颗粒统计 ──",
+            f"颗粒总数: {result.grain_count_filtered} 颗",
+            f"平均粒径: {result.average_diameter_mm:.1f} mm",
+            f"中位粒径: {result.median_diameter_mm:.1f} mm",
+            f"最大粒径: {result.max_diameter_mm:.1f} mm",
+            f"颗粒总面积: {result.total_area_real:.0f} mm²",
+            f"平均圆度: {result.average_circularity:.3f}",
+            f"图像面积: {result.image_area_real:.0f} mm²",
+            "",
+            compute_size_distribution_text(result),
+            "",
+            "── 颗粒明细 (前 20 颗) ──",
+        ]
+        for g in result.grains[:20]:
+            lines.append(
+                f"  #{g.id}: {g.diameter_major_mm:.1f}mm, "
+                f"圆度={g.circularity:.2f}, "
+                f"密实度={g.solidity:.2f}, "
+                f"{g.size_class}"
+            )
+        if len(result.grains) > 20:
+            lines.append(f"  ... (共 {len(result.grains)} 颗)")
+        lines.append("")
+        lines.append(f"备注: {info.get('remarks', '无')}")
+        self.report_view.setPlainText("\n".join(lines))
+
+    def _save(self):
+        text = self.report_view.toPlainText()
+        if not text:
+            QMessageBox.warning(self, "提示", "请先生成报告")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存报告", "粒度分析报告.txt",
+            "文本文件 (*.txt);;所有文件 (*)"
+        )
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            QMessageBox.information(self, "保存成功", f"报告已保存到:\n{path}")
+            self.completed.emit()

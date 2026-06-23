@@ -38,6 +38,21 @@ from .fracture_accuracy import (
     FractureAccuracyReport, evaluate_fracture_accuracy,
     detect_fractures_robust, compute_pixel_metrics, match_fractures,
 )
+from .grain import (
+    GrainParams, GrainAnalysisResult, Grain,
+    classify_grain_size, detect_grain_mask, analyze_grains,
+    draw_grain_annotations, compute_size_distribution_text,
+    SIZE_CLASSES_ORDERED,
+)
+from .synthetic_grain import (
+    SyntheticGrain, generate_synthetic_grain_rock,
+    make_default_synthetic_grain, make_overlapping_synthetic_grain,
+    make_granite_synthetic_grain,
+)
+from .grain_accuracy import (
+    GrainAccuracyReport, evaluate_grain_accuracy,
+    detect_grains_robust, compute_pixel_metrics, match_grains,
+)
 
 __all__ = [
     "Scale", "Calibration", "pixel_to_mm", "mm_to_pixel",
@@ -60,4 +75,14 @@ __all__ = [
     "make_default_synthetic_fracture",
     "FractureAccuracyReport", "evaluate_fracture_accuracy",
     "detect_fractures_robust", "compute_pixel_metrics", "match_fractures",
+    # 粒度分析
+    "GrainParams", "GrainAnalysisResult", "Grain",
+    "classify_grain_size", "detect_grain_mask", "analyze_grains",
+    "draw_grain_annotations", "compute_size_distribution_text",
+    "SIZE_CLASSES_ORDERED",
+    "SyntheticGrain", "generate_synthetic_grain_rock",
+    "make_default_synthetic_grain", "make_overlapping_synthetic_grain",
+    "make_granite_synthetic_grain",
+    "GrainAccuracyReport", "evaluate_grain_accuracy",
+    "detect_grains_robust", "match_grains",
 ]
