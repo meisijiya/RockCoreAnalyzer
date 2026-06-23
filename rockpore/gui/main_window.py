@@ -561,10 +561,11 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(slot)
             tb.addWidget(btn)
         tb.addSeparator()
-        # 帮助
-        a_help = QPushButton("❓")
-        a_help.setToolTip("帮助 (F1)")
-        a_help.setFixedSize(36, 36)
+        # v1.2.0: 帮助按钮 - 跟其他按钮统一大小(emoji + 文本),
+        # 之前 36x36 的小方块 + 单 emoji "❓" 在 Windows 字体回退
+        # 下显示不全 (灰色方块或被裁剪)
+        a_help = QPushButton("❓ 帮助")
+        a_help.setToolTip("帮助 (F1) - 使用说明")
         a_help.clicked.connect(self._show_help)
         tb.addWidget(a_help)
 
