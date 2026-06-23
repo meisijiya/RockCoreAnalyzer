@@ -319,7 +319,14 @@ class Step5GrainExtract(QWidget):
         # 但整个图片都快标记完了」 — 因为 bin_mask 是 OTSU 原始
         # 前景(可能占 60% 图像),而 markers 只有实际颗粒区域。
         # 视觉与数量对不上 → 改用 markers 区域显示
-        grain_region_mask = ((markers > 1).astype(np.uint8)) * 255
+        # v1.2.0 进一步修复: 0 颗时不显示误导性大区域
+        # dtr=80% 时,虽然 0 颗,但 markers>1 还有 26 万像素
+        # (watershed 还是会分配大区域,被 max_area_ratio 过滤)
+        # 0 颗时显示空 mask
+        if result.grain_count_filtered == 0:
+            grain_region_mask = np.zeros_like(bin_mask)
+        else:
+            grain_region_mask = ((markers > 1).astype(np.uint8)) * 255
         ctx["grain_params"] = params
         ctx["grain_blur"] = self.blur_kernel.value()
         ctx["grain_morph_close"] = self.morph_close.value()
@@ -337,7 +344,9 @@ class Step5GrainExtract(QWidget):
             f"提取到 {result.grain_count_filtered} 个颗粒\n"
             f"平均粒径: {result.average_diameter_mm:.1f} mm\n"
             f"粒级分布: {dict((k, v) for k, v in result.size_distribution.items() if v > 0)}\n"
-            f"\n提示: 距离山峰={int(self.dtr.value())}% {'较高,只识别大颗粒 (默认30%)' if self.dtr.value() > 40 else '正常' if self.dtr.value() >= 20 else '较低,可能识别过多小颗粒'}")
+            f"\n提示: 距离山峰={int(self.dtr.value())}% "
+            f"{'较高,只识别大颗粒 (默认30%)' if self.dtr.value() > 40 else '正常' if self.dtr.value() >= 20 else '较低,可能识别过多小颗粒'}"
+            f"{' ⚠ 0 颗!距离山峰过高或最小面积过大,建议调低' if result.grain_count_filtered == 0 else ''}")
         # v1.2.0 修复: emit 实际颗粒分割区域而不是 OTSU 二值图
         # (避免 _on_mask_extracted 又把视觉覆盖回 bin_mask)
         self.extracted.emit(grain_region_mask)
