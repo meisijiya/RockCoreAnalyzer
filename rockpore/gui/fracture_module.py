@@ -12,11 +12,11 @@ import cv2
 import numpy as np
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-    QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSizePolicy, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
+    QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
+    QScrollArea, QSizePolicy, QSpinBox, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from .module_base import AnalysisModule, StepDefinition
@@ -431,9 +431,18 @@ class Step6FractureEdit(QWidget):
         self.edited.emit(new_mask)
 
 
-# ============= 步骤 7: 裂缝类型标注 =============
-class Step7FractureType(QWidget):
-    typed = pyqtSignal(dict)
+# ============= 步骤 7: 分析参数设置 (v1.1.4 重构) =============
+class Step7AnalysisParams(QWidget):
+    """裂缝分析参数设置.
+
+    v1.1.4 改进: 不再是"类型标注",而是真正影响 Step 8 分析结果的参数:
+    - 报告级缝宽阈值: < 阈值的裂缝不计入报告 (PDF 1.3: 默认 0.1mm)
+    - 大缝/中缝分类阈值: ≥ 阈值为大缝 (PDF 1.2: 默认 10mm)
+    - 中缝/小缝分类阈值: ≥ 阈值为中缝 (PDF 1.2: 默认 1mm)
+
+    修改这些参数后,Step 8 会自动用新参数重新分析.
+    """
+    params_changed = pyqtSignal()
 
     def __init__(self, ctx_getter, parent=None):
         super().__init__(parent)
@@ -441,69 +450,174 @@ class Step7FractureType(QWidget):
         v = QVBoxLayout(self)
         v.setContentsMargins(20, 20, 20, 20)
         v.setSpacing(12)
-        title = QLabel("🏷  类型标注")
+        title = QLabel("⚙  分析参数")
         title.setObjectName("pageTitle")
         v.addWidget(title)
-        sub = QLabel("为每条裂缝标注成因类型(可选,默认均为未分类)")
+        sub = QLabel("调整裂缝分析的阈值参数(修改后 Step 8 自动重算)")
         sub.setObjectName("pageSubtitle")
         v.addWidget(sub)
-        # 类型说明
-        card = Card("info")
-        card.add_content(
-            "🔍 裂缝类型分类(PDF 1.2 节):\n\n"
-            "① 构造缝 — 受构造应力形成,通常规则平直\n"
-            "② 成岩缝 — 沉积过程中形成,常被方解石/泥质充填\n"
-            "③ 风化缝 — 暴露地表后风化形成,形状不规则\n\n"
-            "💡 批量标注:在下方设置默认类型,点击「应用」即可批量更新所有裂缝"
+        # 报告级缝宽阈值
+        card1 = Card("tip")
+        card1.add_content(
+            "📏 报告级缝宽阈值\n\n"
+            "裂缝缝宽 < 该阈值的,不计入「报告级裂缝数」。\n"
+            "依据 PDF 1.3 节:缝宽 < 0.1mm 的裂缝通常不计入正式报告。\n"
+            "💡 调整此值可控制报告的严格程度。"
         )
-        v.addWidget(card)
-        # 批量标注控件
-        type_card = Card("tip")
-        cv_layout = type_card._layout
-        form = QFormLayout()
-        self.bulk_type = QComboBox()
-        self.bulk_type.addItems(["未分类", "构造缝", "成岩缝", "风化缝"])
-        form.addRow("默认类型:", self.bulk_type)
-        self.bulk_fill = QComboBox()
-        self.bulk_fill.addItems(["未充填", "半充填", "全充填"])
-        form.addRow("默认充填:", self.bulk_fill)
-        self.bulk_open = QComboBox()
-        self.bulk_open.addItems(["开启", "半开启", "闭合"])
-        form.addRow("默认开启度:", self.bulk_open)
-        apply_btn = QPushButton("✅ 应用批量标注")
-        apply_btn.setObjectName("primaryButton")
-        apply_btn.setMinimumHeight(40)
-        apply_btn.clicked.connect(self._apply_bulk)
-        form.addRow(apply_btn)
-        cv_layout.addLayout(form)
-        v.addWidget(type_card)
+        cv1 = card1._layout
+        self.min_width = QDoubleSpinBox()
+        self.min_width.setRange(0.01, 5.0)
+        self.min_width.setDecimals(2)
+        self.min_width.setSingleStep(0.05)
+        self.min_width.setValue(0.10)
+        self.min_width.setSuffix(" mm")
+        self.min_width.valueChanged.connect(self._on_param_changed)
+        cv1.addWidget(self.min_width)
+        v.addWidget(card1)
+        # 大缝/中缝阈值
+        card2 = Card("tip")
+        card2.add_content(
+            "📏 大缝/中缝分类阈值\n\n"
+            "裂缝缝宽 ≥ 该阈值的,分类为「大缝」。\n"
+            "依据 PDF 1.2 节:大缝 ≥ 10mm。\n"
+            "💡 调整此值可改变大缝/中缝的统计分布。"
+        )
+        cv2 = card2._layout
+        self.threshold_large = QDoubleSpinBox()
+        self.threshold_large.setRange(1.0, 50.0)
+        self.threshold_large.setDecimals(1)
+        self.threshold_large.setSingleStep(0.5)
+        self.threshold_large.setValue(10.0)
+        self.threshold_large.setSuffix(" mm")
+        self.threshold_large.valueChanged.connect(self._on_param_changed)
+        cv2.addWidget(self.threshold_large)
+        v.addWidget(card2)
+        # 中缝/小缝阈值
+        card3 = Card("tip")
+        card3.add_content(
+            "📏 中缝/小缝分类阈值\n\n"
+            "裂缝缝宽 ≥ 该阈值 且 < 大缝阈值,分类为「中缝」。\n"
+            "依据 PDF 1.2 节:中缝 1~10mm,小缝 < 1mm。\n"
+            "💡 调整此值可改变中缝/小缝的统计分布。"
+        )
+        cv3 = card3._layout
+        self.threshold_medium = QDoubleSpinBox()
+        self.threshold_medium.setRange(0.1, 10.0)
+        self.threshold_medium.setDecimals(1)
+        self.threshold_medium.setSingleStep(0.5)
+        self.threshold_medium.setValue(1.0)
+        self.threshold_medium.setSuffix(" mm")
+        self.threshold_medium.valueChanged.connect(self._on_param_changed)
+        cv3.addWidget(self.threshold_medium)
+        v.addWidget(card3)
+        # 应用按钮
+        self.apply_btn = QPushButton("✅ 应用参数并重新分析")
+        self.apply_btn.setObjectName("primaryButton")
+        self.apply_btn.setMinimumHeight(40)
+        self.apply_btn.clicked.connect(self._apply)
+        v.addWidget(self.apply_btn)
+        # 说明
+        info = QLabel(
+            "💡 这些参数修改后会保存到 context,Step 8 会用新参数重新分析。\n"
+            "  • 报告级裂缝数: 重新计算 fracture_count_report\n"
+            "  • 宽度分类(大/中/小): 重新计算 size_class\n"
+            "  • 密度统计: 自动重算"
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #57606a; font-size: 12px; padding: 8px;")
+        v.addWidget(info)
         v.addStretch(1)
+        # 从 ctx 加载已有参数
+        self._load_from_ctx()
 
-    def _apply_bulk(self):
-        """批量标注当前结果中的所有裂缝."""
+    def _load_from_ctx(self):
+        """从 ctx 加载参数(如果有)."""
         ctx = self.ctx()
-        result = ctx.get("analysis_result")
-        if result is None or result.fracture_count == 0:
-            QMessageBox.information(self, "提示", "请先在 Step 8 完成裂缝分析")
+        params = ctx.get("analysis_params")
+        if params is not None:
+            self.min_width.setValue(params.get("min_width", 0.10))
+            self.threshold_large.setValue(params.get("threshold_large", 10.0))
+            self.threshold_medium.setValue(params.get("threshold_medium", 1.0))
+
+    def _on_param_changed(self, _value):
+        """参数变化 → 提示用户点应用按钮."""
+        # 不立即重新分析,等用户点应用按钮
+        pass
+
+    def _apply(self):
+        """应用参数并重新分析."""
+        ctx = self.ctx()
+        # 检查是否有掩码可分析
+        mask = ctx.get("mask")
+        if mask is None:
+            QMessageBox.warning(self, "提示", "请先提取裂缝(Step 5)")
             return
-        from rockpore.core.fracture import (
-            FractureType, FractureFill, FractureOpenness,
+        scale = ctx.get("scale")
+        if scale is None:
+            from rockpore.core.calibration import scale_from_dpi
+            scale = scale_from_dpi(96)
+            ctx["scale"] = scale
+        # 保存参数到 ctx
+        params = {
+            "min_width": self.min_width.value(),
+            "threshold_large": self.threshold_large.value(),
+            "threshold_medium": self.threshold_medium.value(),
+        }
+        ctx["analysis_params"] = params
+        # 重新分析
+        from rockpore.core.fracture import analyze_fractures
+        from rockpore.core.analysis import Scale as ScaleT
+        # 用新阈值重新计算
+        result = analyze_fractures(
+            mask, scale,
+            min_width_real=params["min_width"],
+            min_length_px=15,
         )
-        type_map = {"构造缝": FractureType.STRUCTURAL,
-                    "成岩缝": FractureType.DIAGENETIC,
-                    "风化缝": FractureType.WEATHERING,
-                    "未分类": FractureType.UNKNOWN}
-        fill_map = {"未充填": FractureFill.UNFILLED,
-                    "半充填": FractureFill.SEMI_FILLED,
-                    "全充填": FractureFill.FILLED}
-        open_map = {"开启": FractureOpenness.OPEN,
-                    "半开启": FractureOpenness.SEMI_OPEN,
-                    "闭合": FractureOpenness.CLOSED}
+        # 重新分类
+        from rockpore.core.fracture import classify_fracture_width
         for f in result.fractures:
-            f.fracture_type = type_map[self.bulk_type.currentText()]
-            f.fill_status = fill_map[self.bulk_fill.currentText()]
-            f.openness = open_map[self.bulk_open.currentText()]
-        self.typed.emit({})
+            f.size_class = classify_fracture_width_with_params(
+                f.width_real,
+                params["threshold_large"],
+                params["threshold_medium"],
+            )
+        # 重新统计
+        result.width_distribution = {"大缝": 0, "中缝": 0, "小缝": 0}
+        for f in result.fractures:
+            result.width_distribution[f.size_class] += 1
+        # 报告级裂缝数
+        result.fracture_count_report = sum(
+            1 for f in result.fractures if f.width_real >= params["min_width"]
+        )
+        ctx["analysis_result"] = result
+        # 通知主窗口刷新
+        self.params_changed.emit()
+        QMessageBox.information(
+            self, "参数已应用",
+            f"✅ 已用新参数重新分析:\n\n"
+            f"• 报告级缝宽阈值: {params['min_width']:.2f} mm\n"
+            f"• 大缝/中缝阈值: {params['threshold_large']:.1f} mm\n"
+            f"• 中缝/小缝阈值: {params['threshold_medium']:.1f} mm\n\n"
+            f"结果:\n"
+            f"• 裂缝总数: {result.fracture_count} 条\n"
+            f"• 报告级(≥{params['min_width']:.2f}mm): {result.fracture_count_report} 条\n"
+            f"• 大缝: {result.width_distribution['大缝']} 条\n"
+            f"• 中缝: {result.width_distribution['中缝']} 条\n"
+            f"• 小缝: {result.width_distribution['小缝']} 条"
+        )
+
+
+def classify_fracture_width_with_params(
+    width_mm: float,
+    threshold_large: float,
+    threshold_medium: float,
+) -> str:
+    """用自定义阈值对裂缝宽度分类."""
+    if width_mm >= threshold_large:
+        return "大缝"
+    if width_mm >= threshold_medium:
+        return "中缝"
+    return "小缝"
 
 
 # ============= 步骤 8: 裂缝分析 =============
@@ -572,12 +686,14 @@ class Step8FractureAnalyze(QWidget):
             cards_grid.addWidget(frame, r, c)
         v.addLayout(cards_grid)
         # 表格 - 强制最小高度
+        # v1.1.4: "类型" 列改为可编辑的下拉框(用户直接在表格里标类型)
         self.table = QTableWidget(0, 7)
         self.table.setObjectName("dataTable")
         self.table.setHorizontalHeaderLabels([
-            "ID", "类型", "长度(mm)", "宽度(mm)", "倾角(°)", "分类", "状态"
+            "ID", "类型", "长度(mm)", "宽度(mm)", "倾角(°)", "分类", "开启度"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # 仅"类型"列可编辑
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setMinimumHeight(200)
@@ -613,25 +729,48 @@ class Step8FractureAnalyze(QWidget):
         self._cards["linear_density"].setText(f"{result.linear_density:.3f}")
         self._cards["total_length"].setText(f"{result.total_length_real:.2f}")
         self._cards["avg_width"].setText(f"{result.average_width_real:.3f}")
-        # 表格
+        # 表格 — v1.1.4: "类型" 列改为可编辑下拉框
+        from PyQt5.QtWidgets import QComboBox
         self.table.setRowCount(0)
+        type_options = ["未分类", "构造缝", "成岩缝", "风化缝"]
         for f in result.fractures:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            cells = [
-                str(f.id),
-                f.fracture_type.value,
-                f"{f.length_real:.2f}",
-                f"{f.width_real:.3f}",
-                f"{f.orientation_deg:.1f}",
-                f.size_class,
-                f.openness.value,
-            ]
-            for col, val in enumerate(cells):
-                item = QTableWidgetItem(val)
-                if col == 0:
-                    item.setData(Qt.UserRole, f.id)
-                self.table.setItem(row, col, item)
+            # 列 0: ID
+            id_item = QTableWidgetItem(str(f.id))
+            id_item.setData(Qt.UserRole, f.id)
+            self.table.setItem(row, 0, id_item)
+            # 列 1: 类型 (可编辑下拉框)
+            type_combo = QComboBox()
+            type_combo.addItems(type_options)
+            type_combo.setCurrentText(f.fracture_type.value)
+            type_combo.currentTextChanged.connect(
+                lambda text, fid=f.id: self._on_type_changed(fid, text)
+            )
+            self.table.setCellWidget(row, 1, type_combo)
+            # 列 2: 长度
+            self.table.setItem(row, 2, QTableWidgetItem(f"{f.length_real:.2f}"))
+            # 列 3: 宽度
+            self.table.setItem(row, 3, QTableWidgetItem(f"{f.width_real:.3f}"))
+            # 列 4: 倾角
+            self.table.setItem(row, 4, QTableWidgetItem(f"{f.orientation_deg:.1f}"))
+            # 列 5: 分类
+            self.table.setItem(row, 5, QTableWidgetItem(f.size_class))
+            # 列 6: 开启度
+            self.table.setItem(row, 6, QTableWidgetItem(f.openness.value))
+
+    def _on_type_changed(self, fracture_id: int, type_text: str):
+        """用户在表格下拉框里修改了裂缝类型."""
+        from rockpore.core.fracture import FractureType
+        type_map = {
+            "构造缝": FractureType.STRUCTURAL,
+            "成岩缝": FractureType.DIAGENETIC,
+            "风化缝": FractureType.WEATHERING,
+            "未分类": FractureType.UNKNOWN,
+        }
+        f = self._fractures_by_id.get(fracture_id)
+        if f is not None:
+            f.fracture_type = type_map.get(type_text, FractureType.UNKNOWN)
 
     def _on_table_select(self):
         items = self.table.selectedItems()
@@ -944,7 +1083,7 @@ class FractureModule(AnalysisModule):
         if idx == 6:
             return Step6FractureEdit(ctx_getter, parent)
         if idx == 7:
-            return Step7FractureType(ctx_getter, parent)
+            return Step7AnalysisParams(ctx_getter, parent)
         if idx == 8:
             return Step8FractureAnalyze(ctx_getter, parent)
         if idx == 9:

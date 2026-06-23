@@ -190,15 +190,15 @@ def make_default_fracture_steps() -> List[StepDefinition]:
             how="使用形态学闭运算连接断裂。",
         ),
         StepDefinition(
-            index=7, title="参数设置", subtitle="设置裂缝类型",
-            why="裂缝按成因分类(构造缝/成岩缝/风化缝)。",
-            how="为每条裂缝标注类型。",
-            geology="构造缝:受力形成;成岩缝:沉积过程;风化缝:暴露地表形成。",
+            index=7, title="分析参数", subtitle="调整报告阈值与分类阈值",
+            why="裂缝分析的统计结果受阈值影响:报告级缝宽阈值(默认0.1mm)决定哪些裂缝计入正式报告;大/中缝阈值(默认10mm)影响宽度分类。",
+            how="设置三个阈值参数,点击「应用参数并重新分析」,Step 8 会自动重算所有统计。",
+            geology="依据 PDF 1.2-1.3 节:缝宽 < 0.1mm 不计入报告;大缝 ≥ 10mm,中缝 1-10mm,小缝 < 1mm。",
         ),
         StepDefinition(
             index=8, title="裂缝分析", subtitle="计算长度、宽度、密度",
-            why="定量表征裂缝发育程度。",
-            how="W = A / L (宽度=面积/长度)。",
+            why="基于当前阈值对识别出的裂缝进行统计分析。",
+            how="点击「自动分析」,系统根据 Step 7 设定的阈值计算每条裂缝的长度、宽度、宽度分类、统计密度。",
         ),
         StepDefinition(
             index=9, title="基础信息", subtitle="录入项目元数据",
