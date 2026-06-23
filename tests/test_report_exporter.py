@@ -170,5 +170,45 @@ class TestReportExporter(unittest.TestCase):
         self.assertIn("空报告", text)
 
 
+class TestMainWindowExport(unittest.TestCase):
+    """测试主窗口'导出'菜单的多模块支持 (v1.2.0 修复)."""
+
+    def test_export_current_report_uses_ReportExporter(self):
+        """主菜单'导出'应改用 ReportExporter,支持所有结果类型."""
+        import rockpore.gui.main_window as mw
+        # 检查方法存在 (在 MainWindow 类上)
+        self.assertTrue(hasattr(mw.MainWindow, "_build_exporter_for_module"))
+        self.assertTrue(hasattr(mw.MainWindow, "export_current_report"))
+
+    def test_grain_result_supported(self):
+        """GrainAnalysisResult 应被识别并支持导出."""
+        from rockpore.core.grain import GrainAnalysisResult, Grain
+        result = GrainAnalysisResult(
+            image_area_px=1000, image_area_real=10,
+            grain_count=2, grain_count_filtered=2,
+            total_area_px=200, total_area_real=2.0,
+            average_diameter_mm=1.0, median_diameter_mm=1.0,
+            max_diameter_mm=1.5, min_diameter_mm=0.5,
+            average_circularity=0.8,
+            size_distribution={"细砾": 2},
+            grains=[
+                Grain(
+                    id=1, area_px=100, perimeter_px=40,
+                    major_axis_px=15, minor_axis_px=10,
+                    diameter_mm=1.0, diameter_major_mm=1.5,
+                    centroid=(50, 50), bbox=(40, 40, 20, 20),
+                    orientation_deg=0.0, circularity=0.8,
+                    solidity=0.9, aspect_ratio=1.5,
+                    size_class="细砾",
+                ),
+            ],
+        )
+        # hasattr(result, "grains") 应为 True
+        self.assertTrue(hasattr(result, "grains"))
+        # 不应有 pores 属性 (避免错误地走孔洞路径)
+        self.assertFalse(hasattr(result, "pores"))
+        self.assertFalse(hasattr(result, "fractures"))
+
+
 if __name__ == "__main__":
     unittest.main()

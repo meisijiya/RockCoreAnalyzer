@@ -830,6 +830,15 @@ class Step10Report(QWidget):
         gen_btn.setMinimumHeight(40)
         gen_btn.clicked.connect(self._generate)
         h.addWidget(gen_btn)
+        # v1.2.0: 格式选择下拉框
+        from rockpore.core.report_exporter import SUPPORTED_FORMATS
+        self.format_combo = QComboBox()
+        for fmt, meta in SUPPORTED_FORMATS.items():
+            self.format_combo.addItem(meta["label"], fmt)
+        self.format_combo.setCurrentIndex(0)  # 默认 HTML
+        self.format_combo.setMinimumWidth(180)
+        self.format_combo.setToolTip("选择报告保存格式")
+        h.addWidget(self.format_combo)
         save_btn = QPushButton("💾 保存到文件...")
         save_btn.clicked.connect(self._save)
         h.addWidget(save_btn)
@@ -842,12 +851,12 @@ class Step10Report(QWidget):
 
     def _generate(self):
         ctx = self.ctx()
-        if "analysis_result" not in ctx:
-            QMessageBox.warning(self, "提示", "请先完成孔洞分析")
+        result = ctx.get("analysis_result")
+        if result is None:
+            QMessageBox.warning(self, "提示", "请先完成孔洞分析 (Step 8)")
             return
         from rockpore.core.report import _make_annotated_image
         from rockpore.core.report_exporter import ReportExporter
-        result = ctx["analysis_result"]
         scale = ctx.get("scale")
         scale_info = f"{scale.pixels_per_unit:.3f} px/{'μm' if 'MICROMETER' in scale.unit.name else 'mm'}" if scale else "-"
         try:
@@ -917,15 +926,21 @@ class Step10Report(QWidget):
         if self._exporter is None:
             return
         from rockpore.core.report_exporter import SUPPORTED_FORMATS
-        filters = ";;".join(meta["label"] for meta in SUPPORTED_FORMATS.values())
+        # v1.2.0: 用下拉框选择的格式作为默认
+        fmt = self.format_combo.currentData() or "html"
+        meta = SUPPORTED_FORMATS.get(fmt, SUPPORTED_FORMATS["html"])
+        default_name = f"pore_report.{meta['ext']}"
+        # 构造过滤器,默认选中下拉框格式
+        filters = ";;".join(m["label"] for m in SUPPORTED_FORMATS.values())
         filters += ";;所有文件 (*)"
         path, selected_filter = QFileDialog.getSaveFileName(
-            self, "保存报告", "pore_report.html", filters
+            self, "保存报告", default_name, filters, meta["label"]
         )
         if not path:
             return
-        fmt_by_label = {meta["label"]: fmt for fmt, meta in SUPPORTED_FORMATS.items()}
-        fmt = fmt_by_label.get(selected_filter, "html")
+        # 优先用下拉框的格式,然后是文件对话框选的,最后是扩展名
+        fmt_by_label = {m["label"]: f for f, m in SUPPORTED_FORMATS.items()}
+        fmt = fmt_by_label.get(selected_filter, fmt)
         ext = os.path.splitext(path)[1].lstrip(".").lower()
         if ext in SUPPORTED_FORMATS:
             fmt = ext
@@ -934,7 +949,6 @@ class Step10Report(QWidget):
             QMessageBox.information(self, "保存成功", f"报告已保存到:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "保存失败", f"导出 {fmt.upper()} 失败:\n{e}")
-            QMessageBox.information(self, "保存成功", f"报告已保存到:\n{path}")
 
 
 # ============= 步骤占位(2, 7)=============

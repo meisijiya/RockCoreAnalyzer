@@ -642,37 +642,161 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"✅ 标注图已保存: {path}")
 
     def export_current_report(self):
+        """v1.2.0: 顶部菜单"导出" → 用 ReportExporter 导出多格式.
+        支持孔洞/裂缝/粒度 三种结果类型.
+        """
         page = self.tabs.currentWidget()
         result = page.context.get("analysis_result")
         if result is None:
-            QMessageBox.warning(self, "提示", "请先完成分析")
+            QMessageBox.warning(self, "提示", "请先完成分析 (Step 8)")
             return
-        from rockpore.core.report import ReportData, generate_report, _make_annotated_image
+        from rockpore.core.report_exporter import ReportExporter, SUPPORTED_FORMATS
         scale = page.context.get("scale")
-        scale_info = f"{scale.pixels_per_unit:.3f} px/{'μm' if scale and 'MICROMETER' in scale.unit.name else 'mm'}" if scale else "-"
-        annot = _make_annotated_image(page.context["image"], page.context.get("mask"), result)
         info = page.context.get("info", {})
-        data = ReportData(
-            project_name=info.get("project", ""),
-            sample_id=info.get("sample_id", ""),
-            analyst=info.get("analyst", ""),
-            image_path=page.context.get("image_path", ""),
-            image_size=(page.context["image"].shape[1], page.context["image"].shape[0]),
-            scale_info=scale_info,
-            remarks=info.get("remarks", ""),
-            analysis_result=result,
-            original_image=page.context["image"],
-            annotated_image=annot,
+        module_name = self.modules[self.current_module_idx].name
+        # 根据结果类型构造 exporter
+        exporter = self._build_exporter_for_module(
+            result, info, scale,
+            page.context.get("image"),
+            page.context.get("mask"),
+            module_name,
         )
-        html = generate_report(data)
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存报告", f"report_{self.modules[self.current_module_idx].name}.html",
-            "HTML (*.html)"
+        if exporter is None:
+            QMessageBox.warning(self, "提示", f"未识别的结果类型: {type(result).__name__}")
+            return
+        # 弹文件对话框
+        filters = ";;".join(meta["label"] for meta in SUPPORTED_FORMATS.values())
+        filters += ";;所有文件 (*)"
+        default_name = f"report_{module_name}.html"
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "保存报告", default_name, filters,
         )
-        if path:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(html)
+        if not path:
+            return
+        # 推断格式
+        fmt_by_label = {meta["label"]: fmt for fmt, meta in SUPPORTED_FORMATS.items()}
+        fmt = fmt_by_label.get(selected_filter, "html")
+        ext = os.path.splitext(path)[1].lstrip(".").lower()
+        if ext in SUPPORTED_FORMATS:
+            fmt = ext
+        try:
+            exporter.export(fmt, path)
             self.status_label.setText(f"✅ 报告已保存: {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "保存失败", f"导出 {fmt.upper()} 失败:\n{e}")
+
+    def _build_exporter_for_module(
+        self, result, info, scale, image, mask, module_name,
+    ):
+        """根据结果类型构造 ReportExporter (供顶部菜单"导出"用)."""
+        from rockpore.core.report_exporter import ReportExporter
+        # 标注图
+        annotated = None
+        try:
+            if hasattr(result, "pores") and image is not None and mask is not None:
+                from rockpore.core.report import _make_annotated_image
+                annotated = _make_annotated_image(image, mask, result)
+            elif hasattr(result, "fractures") and image is not None and mask is not None:
+                from rockpore.core.fracture import draw_fracture_annotations
+                annotated = draw_fracture_annotations(image if image is not None else mask, result.fractures)
+        except Exception:
+            annotated = None
+        # 标尺
+        scale_info = (
+            f"{scale.pixels_per_unit:.3f} px/{scale.unit.value}"
+            if scale else "-"
+        )
+        # 按模块/结果类型构造
+        if hasattr(result, "pores"):
+            # 孔洞
+            info_dict = {
+                "项目": info.get("project", ""),
+                "样品编号": info.get("sample_id", ""),
+                "分析人员": info.get("analyst", ""),
+                "图像": image_path if (image_path := "") else "",
+                "标尺": scale_info,
+            }
+            summary = {
+                "孔洞总个数": f"{result.pore_count} 个",
+                "报告级(≥2mm)": f"{result.pore_count_report} 个",
+                "孔洞面孔率": f"{result.porosity * 100:.2f} %",
+                "平均等效直径": f"{result.average_diameter_real:.2f} mm",
+                "总孔洞面积": f"{result.total_pore_area_real:.2f} mm²",
+            }
+            summary.update({f"分类_{k}": f"{v} 个" for k, v in result.size_distribution.items()})
+            headers = ["ID", "等效直径(mm)", "面积(mm²)", "形状因子", "分类", "圆度", "位置"]
+            rows = [[
+                p.id, f"{p.diameter_real:.2f}", f"{p.area_real:.2f}",
+                f"{p.shape_factor:.3f}", p.size_class, f"{p.circularity:.2f}",
+                f"({p.centroid[0]:.0f},{p.centroid[1]:.0f})",
+            ] for p in result.pores]
+            return ReportExporter(
+                title=f"岩心孔洞分析报告",
+                info=info_dict, summary=summary,
+                headers=headers, rows=rows,
+                annotated_image=annotated,
+                notes=info.get("remarks", ""),
+            )
+        if hasattr(result, "fractures"):
+            # 裂缝
+            info_dict = {
+                "项目名称": info.get("project_name", ""),
+                "样品编号": info.get("sample_id", ""),
+                "分析人员": info.get("operator", ""),
+                "标尺": scale_info,
+            }
+            summary = {
+                "裂缝总数": f"{result.fracture_count} 条",
+                "大缝(≥10mm)": f"{result.width_distribution.get('大缝', 0)} 条",
+                "中缝(1-10mm)": f"{result.width_distribution.get('中缝', 0)} 条",
+                "小缝(<1mm)": f"{result.width_distribution.get('小缝', 0)} 条",
+                "累计长度": f"{result.total_length_real:.2f} mm",
+                "平均宽度": f"{result.average_width_real:.3f} mm",
+                "面密度": f"{result.areal_density:.4f} 1/mm",
+                "线密度": f"{result.linear_density:.3f} 1/mm",
+            }
+            headers = ["ID", "类型", "长度(mm)", "宽度(mm)", "倾角(°)", "分类", "开启度", "充填"]
+            rows = [[
+                f.id, f.fracture_type.value,
+                f"{f.length_real:.2f}", f"{f.width_real:.3f}",
+                f"{f.orientation_deg:.1f}", f.size_class,
+                f.openness.value, f.fill_status.value,
+            ] for f in result.fractures]
+            return ReportExporter(
+                title="裂缝分析报告",
+                info=info_dict, summary=summary,
+                headers=headers, rows=rows,
+                annotated_image=annotated,
+                notes=info.get("notes", ""),
+            )
+        if hasattr(result, "grains"):
+            # 粒度
+            info_dict = {
+                "井号": info.get("well_name", ""),
+                "深度": info.get("depth", ""),
+                "岩性": info.get("rock_type", ""),
+            }
+            summary = {
+                "颗粒总数": f"{result.grain_count_filtered} 颗",
+                "平均粒径": f"{result.average_diameter_mm:.1f} mm",
+                "中位粒径": f"{result.median_diameter_mm:.1f} mm",
+                "最大粒径": f"{result.max_diameter_mm:.1f} mm",
+                "平均圆度": f"{result.average_circularity:.3f}",
+            }
+            headers = ["#", "粒径(mm)", "长轴(mm)", "面积(px²)", "圆度", "密实度", "长宽比", "粒级"]
+            rows = [[
+                g.id, f"{g.diameter_mm:.2f}", f"{g.diameter_major_mm:.2f}",
+                f"{g.area_px:.0f}", f"{g.circularity:.3f}",
+                f"{g.solidity:.3f}", f"{g.aspect_ratio:.2f}", g.size_class,
+            ] for g in result.grains]
+            return ReportExporter(
+                title="岩石粒度分析报告",
+                info=info_dict, summary=summary,
+                headers=headers, rows=rows,
+                annotated_image=annotated,
+                notes=info.get("remarks", ""),
+            )
+        return None
 
     def _redo_current(self):
         """重置当前模块的所有分析结果,回到"刚加载图像"状态.

@@ -896,6 +896,15 @@ class Step10FractureReport(QWidget):
         gen_btn.setMinimumHeight(40)
         gen_btn.clicked.connect(self._preview)
         h.addWidget(gen_btn)
+        # v1.2.0: 格式选择下拉框
+        from rockpore.core.report_exporter import SUPPORTED_FORMATS
+        self.format_combo = QComboBox()
+        for fmt, meta in SUPPORTED_FORMATS.items():
+            self.format_combo.addItem(meta["label"], fmt)
+        self.format_combo.setCurrentIndex(0)
+        self.format_combo.setMinimumWidth(180)
+        self.format_combo.setToolTip("选择报告保存格式")
+        h.addWidget(self.format_combo)
         save_btn = QPushButton("💾 保存报告")
         save_btn.setMinimumHeight(40)
         save_btn.clicked.connect(self._save)
@@ -954,17 +963,21 @@ class Step10FractureReport(QWidget):
         # 构造 exporter
         info = ctx.get("info", {})
         exporter = self._build_exporter(result, info, scale, annotated)
+        # v1.2.0: 用下拉框选择的格式作为默认
+        fmt = self.format_combo.currentData() or "html"
+        meta = SUPPORTED_FORMATS.get(fmt, SUPPORTED_FORMATS["html"])
+        default_name = f"fracture_report.{meta['ext']}"
         # 弹文件对话框
-        filters = ";;".join(meta["label"] for meta in SUPPORTED_FORMATS.values())
+        filters = ";;".join(m["label"] for m in SUPPORTED_FORMATS.values())
         filters += ";;所有文件 (*)"
         path, selected_filter = QFileDialog.getSaveFileName(
-            self, "保存报告", "fracture_report.html", filters,
+            self, "保存报告", default_name, filters, meta["label"],
         )
         if not path:
             return
-        # 推断格式
-        fmt_by_label = {meta["label"]: fmt for fmt, meta in SUPPORTED_FORMATS.items()}
-        fmt = fmt_by_label.get(selected_filter, "html")
+        # 优先用对话框选的, 然后是下拉框的, 最后是扩展名
+        fmt_by_label = {m["label"]: f for f, m in SUPPORTED_FORMATS.items()}
+        fmt = fmt_by_label.get(selected_filter, fmt)
         ext = os.path.splitext(path)[1].lstrip(".").lower()
         if ext in SUPPORTED_FORMATS:
             fmt = ext
