@@ -528,14 +528,13 @@ class Step8GrainAnalyze(QWidget):
             lab = QLabel(label)
             lab.setObjectName("dataCardLabel")
             fv.addWidget(lab)
+            # 单位嵌入数值文本(与 fracture 一致),
+            # 避免单独 unit_lbl 与 val 视觉错位
             val = QLabel("-")
             val.setObjectName("dataCardValue")
             val.setMinimumHeight(30)
             val.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             fv.addWidget(val)
-            unit_lbl = QLabel(unit)
-            unit_lbl.setStyleSheet("color: #8b949e; font-size: 10px;")
-            fv.addWidget(unit_lbl)
             cards_grid.addWidget(frame, r, c)
             self._cards[key] = val
         v.addLayout(cards_grid)
@@ -580,12 +579,12 @@ class Step8GrainAnalyze(QWidget):
         )
         result, _, _ = analyze_grains(image, scale, params, mask=mask)
         ctx["analysis_result"] = result
-        # 显示统计卡片
-        self._cards["grain_count"].setText(str(result.grain_count_filtered))
-        self._cards["avg_diameter"].setText(f"{result.average_diameter_mm:.1f}")
-        self._cards["median_diameter"].setText(f"{result.median_diameter_mm:.1f}")
-        self._cards["max_diameter"].setText(f"{result.max_diameter_mm:.1f}")
-        self._cards["total_area"].setText(f"{result.total_area_real:.0f}")
+        # 显示统计卡片(单位嵌入文本,与 fracture 一致)
+        self._cards["grain_count"].setText(f"{result.grain_count_filtered} 颗")
+        self._cards["avg_diameter"].setText(f"{result.average_diameter_mm:.1f} mm")
+        self._cards["median_diameter"].setText(f"{result.median_diameter_mm:.1f} mm")
+        self._cards["max_diameter"].setText(f"{result.max_diameter_mm:.1f} mm")
+        self._cards["total_area"].setText(f"{result.total_area_real:.0f} mm²")
         self._cards["avg_circularity"].setText(f"{result.average_circularity:.2f}")
         # 填充表格
         self._grains_by_id.clear()
