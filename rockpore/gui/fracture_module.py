@@ -111,31 +111,75 @@ class Step5FractureExtract(QWidget):
         # 算法选择
         card = Card("tip")
         cv_layout = card._layout
+        # v1.1.3: 用 QFormLayout 但强制宽标签 + 加水平间距,避免截断
         form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(10)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        # 算法选择 — 全宽 ComboBox
         self.method = QComboBox()
         self.method.addItems([
-            "adaptive(OTSU 暗色+长宽比) ★推荐 — 真实岩石图",
-            "adaptive(自适应阈值) — 备选",
-            "hough(HoughLinesP) — 边缘清晰的合成图",
+            "adaptive (OTSU+长宽比) ★推荐",
+            "adaptive (自适应阈值)",
+            "hough (HoughLinesP)",
         ])
+        self.method.setMinimumWidth(280)
         self.method.currentIndexChanged.connect(self._on_method_changed)
-        form.addRow("检测算法:", self.method)
+        # 用普通 widget 容纳标签+控件,让标签和控件都在一行
+        method_row = QWidget()
+        method_row_layout = QHBoxLayout(method_row)
+        method_row_layout.setContentsMargins(0, 0, 0, 0)
+        method_row_layout.addWidget(QLabel("检测算法:"))
+        method_row_layout.addWidget(self.method, 1)
+        form.addRow(method_row)
         # OTSU 专属参数(推荐默认)
+        # v1.1.3: 标签单独放,SpinBox 放后面;加大 SpinBox 最小宽度
         self.min_aspect = QSpinBox()
         self.min_aspect.setRange(1, 10)
         self.min_aspect.setValue(1)
+        self.min_aspect.setMinimumWidth(140)
         self.min_aspect.setSuffix(" :1 (最小长宽比)")
-        form.addRow(self.min_aspect)
         self.min_area = QSpinBox()
-        self.min_area.setRange(5, 1000)
-        self.min_area.setValue(20)
+        self.min_area.setRange(5, 5000)
+        self.min_area.setValue(100)
+        self.min_area.setMinimumWidth(140)
         self.min_area.setSuffix(" px² (候选最小面积)")
-        form.addRow(self.min_area)
         self.max_area_pct = QSpinBox()
         self.max_area_pct.setRange(1, 100)
         self.max_area_pct.setValue(30)
+        self.max_area_pct.setMinimumWidth(140)
         self.max_area_pct.setSuffix(" % (排除超大区域)")
-        form.addRow(self.max_area_pct)
+        self.otsu_offset = QSpinBox()
+        self.otsu_offset.setRange(-100, 100)
+        self.otsu_offset.setValue(-10)
+        self.otsu_offset.setMinimumWidth(140)
+        self.otsu_offset.setSuffix(" (OTSU 阈值调整)")
+        # v1.1.3: 水平排列标签 + SpinBox,确保不截断
+        ar_row = QWidget()
+        ar_layout = QHBoxLayout(ar_row)
+        ar_layout.setContentsMargins(0, 0, 0, 0)
+        ar_layout.addWidget(QLabel("线状过滤:"))
+        ar_layout.addWidget(self.min_aspect, 1)
+        form.addRow(ar_row)
+        area_row = QWidget()
+        area_layout = QHBoxLayout(area_row)
+        area_layout.setContentsMargins(0, 0, 0, 0)
+        area_layout.addWidget(QLabel("最小面积:"))
+        area_layout.addWidget(self.min_area, 1)
+        form.addRow(area_row)
+        max_row = QWidget()
+        max_layout = QHBoxLayout(max_row)
+        max_layout.setContentsMargins(0, 0, 0, 0)
+        max_layout.addWidget(QLabel("排除超大:"))
+        max_layout.addWidget(self.max_area_pct, 1)
+        form.addRow(max_row)
+        offset_row = QWidget()
+        offset_layout = QHBoxLayout(offset_row)
+        offset_layout.setContentsMargins(0, 0, 0, 0)
+        offset_layout.addWidget(QLabel("阈值偏移:"))
+        offset_layout.addWidget(self.otsu_offset, 1)
+        form.addRow(offset_row)
         # OTSU 开关 + 模糊
         self.use_blur = QCheckBox("高斯模糊 (7x7,去纹理)")
         self.use_blur.setChecked(False)
@@ -148,39 +192,51 @@ class Step5FractureExtract(QWidget):
         self.adaptive_block.setRange(5, 51)
         self.adaptive_block.setValue(21)
         self.adaptive_block.setSingleStep(2)
+        self.adaptive_block.setMinimumWidth(140)
         self.adaptive_block.setSuffix(" px (邻域)")
-        form.addRow(self.adaptive_block)
         self.adaptive_C = QSpinBox()
         self.adaptive_C.setRange(0, 30)
         self.adaptive_C.setValue(10)
+        self.adaptive_C.setMinimumWidth(140)
         self.adaptive_C.setSuffix(" (常数 C)")
-        form.addRow(self.adaptive_C)
+        block_row = QWidget()
+        block_layout = QHBoxLayout(block_row)
+        block_layout.setContentsMargins(0, 0, 0, 0)
+        block_layout.addWidget(QLabel("邻域:"))
+        block_layout.addWidget(self.adaptive_block, 1)
+        form.addRow(block_row)
+        c_row = QWidget()
+        c_layout = QHBoxLayout(c_row)
+        c_layout.setContentsMargins(0, 0, 0, 0)
+        c_layout.addWidget(QLabel("常数 C:"))
+        c_layout.addWidget(self.adaptive_C, 1)
+        form.addRow(c_row)
         # Hough 参数
         self.canny_low = QSpinBox()
         self.canny_low.setRange(10, 200)
         self.canny_low.setValue(90)
+        self.canny_low.setMinimumWidth(140)
         self.canny_low.setSuffix(" (Canny 低阈值)")
-        form.addRow(self.canny_low)
         self.hough_threshold = QSpinBox()
         self.hough_threshold.setRange(5, 200)
         self.hough_threshold.setValue(25)
+        self.hough_threshold.setMinimumWidth(140)
         self.hough_threshold.setSuffix(" (Hough 累加)")
-        form.addRow(self.hough_threshold)
         self.min_length = QSpinBox()
         self.min_length.setRange(5, 500)
         self.min_length.setValue(20)
+        self.min_length.setMinimumWidth(140)
         self.min_length.setSuffix(" px (最小线长)")
-        form.addRow(self.min_length)
         self.max_gap = QSpinBox()
         self.max_gap.setRange(0, 50)
         self.max_gap.setValue(15)
+        self.max_gap.setMinimumWidth(140)
         self.max_gap.setSuffix(" px (最大断裂)")
-        form.addRow(self.max_gap)
         self.dilation = QSpinBox()
         self.dilation.setRange(1, 10)
         self.dilation.setValue(3)
+        self.dilation.setMinimumWidth(140)
         self.dilation.setSuffix(" px (线段粗细)")
-        form.addRow(self.dilation)
         # 提取按钮
         extract_btn = QPushButton("🔍 自动提取裂缝")
         extract_btn.setObjectName("primaryButton")
@@ -200,7 +256,8 @@ class Step5FractureExtract(QWidget):
             "  — 适合边缘清晰的合成图\n\n"
             "💡 参数说明:\n"
             "• 长宽比 ↑ = 过滤更严格(只保留线状)\n"
-            "• 最大面积 % ↓ = 排除覆盖大图的假阳性\n"
+            "• 最小面积 ↑ = 过滤小阴影噪点(默认 200px²)\n"
+            "• 最大面积 % = 排除覆盖大图的假阳性(默认 40%)\n"
             "• 提取会覆盖之前的结果(包括二次编辑)"
         )
         info.setWordWrap(True)
@@ -219,6 +276,7 @@ class Step5FractureExtract(QWidget):
         self.min_aspect.setVisible(is_otsu)
         self.min_area.setVisible(is_otsu)
         self.max_area_pct.setVisible(is_otsu)
+        self.otsu_offset.setVisible(is_otsu)
         self.use_blur.setVisible(is_otsu)
         self.use_close.setVisible(is_otsu)
         # 自适应参数
@@ -246,6 +304,7 @@ class Step5FractureExtract(QWidget):
             params = FractureParams(
                 method="adaptive",
                 use_otsu=True,
+                otsu_offset=self.otsu_offset.value(),
                 blur_kernel=7 if self.use_blur.isChecked() else 0,
                 morph_close=5 if self.use_close.isChecked() else 0,
                 min_aspect_ratio=float(self.min_aspect.value()),
@@ -451,6 +510,7 @@ class Step7FractureType(QWidget):
 class Step8FractureAnalyze(QWidget):
     analyzed = pyqtSignal(object)
     fracture_selected = pyqtSignal(int)
+    show_all_changed = pyqtSignal(bool)  # v1.1.3: 用户切换"显示所有"
 
     def __init__(self, ctx_getter, parent=None):
         super().__init__(parent)
@@ -472,10 +532,11 @@ class Step8FractureAnalyze(QWidget):
         run_btn.setMinimumHeight(36)
         run_btn.clicked.connect(self._run)
         h.addWidget(run_btn)
-        self.show_all_btn = QPushButton("👁 显示所有标注")
+        # 默认勾选"显示所有标注" - 用户进入 Step 8 即可看到标注
+        self.show_all_btn = QPushButton("🙈 隐藏所有标注")
         self.show_all_btn.setObjectName("ghostButton")
         self.show_all_btn.setCheckable(True)
-        self.show_all_btn.setChecked(False)
+        self.show_all_btn.setChecked(True)
         self.show_all_btn.toggled.connect(self._on_show_all_toggled)
         h.addWidget(self.show_all_btn)
         h.addStretch(1)
@@ -539,6 +600,9 @@ class Step8FractureAnalyze(QWidget):
         result = analyze_fractures(mask, scale)
         ctx["analysis_result"] = result
         self._refresh(result)
+        # v1.1.3: 分析后自动显示所有标注(无需用户手动勾选)
+        if self.show_all_btn.isChecked():
+            self._on_show_all_toggled(True)
         self.analyzed.emit(result)
 
     def _refresh(self, result):
@@ -578,6 +642,7 @@ class Step8FractureAnalyze(QWidget):
         if fid_item:
             fid = int(fid_item.text())
             self.fracture_selected.emit(fid)
+            # v1.1.3: 表格行选中时, 临时切换为高亮模式(只显示选中)
             self._update_canvas_highlight(fid)
 
     def _update_canvas_highlight(self, fid: int):
@@ -593,7 +658,7 @@ class Step8FractureAnalyze(QWidget):
             annotations = []
             for other in self._fractures_by_id.values():
                 color = (255, 140, 0) if other.id == fid else (0, 100, 255)
-                label = f"{other.length_real:.1f}mm × {other.width_real:.2f}mm"
+                label = f"#{other.id} {other.length_real:.1f}mm×{other.width_real:.2f}mm"
                 annotations.append(Annotation(
                     id=other.id, bbox=other.bbox, label=label, color=color,
                 ))
@@ -601,26 +666,14 @@ class Step8FractureAnalyze(QWidget):
 
     def _on_show_all_toggled(self, checked: bool):
         """切换显示所有裂缝标注."""
-        ctx = self.ctx()
-        page = ctx.get("__page__")
-        if not page or not hasattr(page, "canvas"):
-            return
-        from .canvas_view import Annotation
+        # 更新按钮文字
         if checked:
-            result = ctx.get("analysis_result")
-            if result:
-                annotations = [
-                    Annotation(
-                        id=f.id,
-                        bbox=f.bbox,
-                        label=f"{f.length_real:.1f}mm × {f.width_real:.2f}mm",
-                        color=(0, 100, 255),
-                    )
-                    for f in result.fractures
-                ]
-                page.canvas.set_annotations(annotations)
+            self.show_all_btn.setText("🙈 隐藏所有标注")
         else:
-            page.canvas.set_annotations([])
+            self.show_all_btn.setText("👁 显示所有标注")
+        # v1.1.3: 通过 show_all_changed 信号通知主窗口(由 main_window 处理画布标注)
+        self.show_all_changed.emit(checked)
+        # 同时本地也更新按钮文字(避免重复触发)
 
 
 # ============= 步骤 9: 基础信息 =============

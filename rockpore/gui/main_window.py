@@ -238,14 +238,31 @@ class ModuleWorkflowPage(QWidget):
         self.context["mask_dirty"] = True
 
     def _on_analysis_done(self, result):
-        """步骤 8 完成: 默认不显示所有标注(避免遮挡图像).
+        """步骤 8 完成: 默认根据模块类型决定是否画标注.
+        - 孔洞: 默认不显示(避免遮挡)
+        - 裂缝: 默认显示所有(v1.1.3, 用户更容易看到主裂缝)
         用户可在右侧"显示所有标注"按钮切换,或点击表格行单独高亮.
         """
         if result is None:
             return
-        # 默认不显示边界框
-        self.canvas.set_annotations([])
-        self._show_all_annotations = False
+        # v1.1.3: 根据结果类型决定默认行为
+        from .canvas_view import Annotation
+        if hasattr(result, "fractures"):
+            # 裂缝分析结果: 默认显示所有标注
+            annotations = [
+                Annotation(
+                    id=f.id, bbox=f.bbox,
+                    label=f"#{f.id} {f.length_real:.1f}mm×{f.width_real:.2f}mm",
+                    color=(0, 100, 255),
+                )
+                for f in result.fractures
+            ]
+            self.canvas.set_annotations(annotations)
+            self._show_all_annotations = True
+        else:
+            # 孔洞分析结果: 默认不显示(避免遮挡)
+            self.canvas.set_annotations([])
+            self._show_all_annotations = False
 
     def _on_pore_selected(self, pore_id: int):
         """用户点击孔洞详情表某行 → 画布高亮该孔洞."""
@@ -272,13 +289,23 @@ class ModuleWorkflowPage(QWidget):
         if result is None:
             return
         if show_all:
-            annotations = [
-                Annotation(
-                    id=p.id, bbox=p.bbox, label=f"{p.diameter_real:.1f}mm",
-                    color=(0, 200, 100),
-                )
-                for p in result.pores
-            ]
+            # v1.1.3: 支持两种结果类型(孔洞 / 裂缝)
+            annotations = []
+            # 检查是否是裂缝结果(FractureAnalysisResult)
+            if hasattr(result, "fractures"):
+                for f in result.fractures:
+                    annotations.append(Annotation(
+                        id=f.id, bbox=f.bbox,
+                        label=f"#{f.id} {f.length_real:.1f}mm×{f.width_real:.2f}mm",
+                        color=(0, 100, 255),
+                    ))
+            # 否则按孔洞处理(PoreAnalysisResult)
+            elif hasattr(result, "pores"):
+                for p in result.pores:
+                    annotations.append(Annotation(
+                        id=p.id, bbox=p.bbox, label=f"{p.diameter_real:.1f}mm",
+                        color=(0, 200, 100),
+                    ))
             self.canvas.set_annotations(annotations)
         else:
             self.canvas.set_annotations([])

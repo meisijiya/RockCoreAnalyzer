@@ -107,16 +107,17 @@ class FractureParams:
     min_line_length_px: int = 20
     max_line_gap_px: int = 15
     dilation_kernel_px: int = 3
-    # 自适应参数(v1.1.2 推荐默认)
+    # 自适应参数(v1.1.3 推荐默认)
     blur_kernel: int = 0            # 0 = 不做模糊(OTSU 已能处理)
     adaptive_block: int = 21
     adaptive_C: int = 10
     morph_close: int = 0            # 0 = 不做闭运算(避免过度合并)
     morph_open: int = 0             # 0 = 不做开运算
     use_otsu: bool = True           # True: OTSU 暗色阈值(推荐); False: 自适应阈值
-    min_aspect_ratio: float = 1.5   # 1.5 比 2.0 更宽松,保留更多候选
-    min_area_for_candidate: int = 20
-    max_area_ratio: float = 0.30    # 排除超大区域(图像 > 30%)
+    otsu_offset: int = -10          # v1.1.3 新增: OTSU 阈值调整(降低10找更暗裂缝)
+    min_aspect_ratio: float = 1.5   # v1.1.3: 1.5 平衡(保留更多候选)
+    min_area_for_candidate: int = 100  # v1.1.3: 从 20 提升到 100(过滤小阴影)
+    max_area_ratio: float = 0.30    # v1.1.3: 0.30(排除超大区域)
     min_skeleton_length_px: int = 15
 
 
@@ -187,20 +188,19 @@ def _detect_fracture_adaptive(
     image: np.ndarray,
     params: FractureParams,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """自适应算法 — v1.1.2 优化版.
+    """自适应算法 — v1.1.3 优化版.
 
-    步骤 (默认 OTSU,综合表现最好):
+    步骤 (默认 OTSU + 阈值调整):
     1. (可选) 高斯模糊消除噪点
     2. OTSU 暗色阈值(默认) / 自适应阈值(可选)
-    3. (可选) 形态学闭运算连接相近裂缝
-    4. (可选) 形态学开运算去噪
-    5. 候选筛选: 长宽比≥阈值 + 长度≥阈值 + 排除超大区域
+    3. v1.1.3 新增: 阈值调整 (otsu_offset, 默认 -30, 降低阈值找更暗的裂缝)
+    4. (可选) 形态学闭运算连接相近裂缝
+    5. (可选) 形态学开运算去噪
+    6. 候选筛选: 长宽比≥阈值 + 长度≥阈值 + 排除超大区域
 
-    v1.1.2 改进:
-    - 默认改用 OTSU 暗色阈值(综合两张真实图测试表现最好)
-    - 默认 AR=1.5(更宽松,保留更多候选)
-    - 默认不做形态学闭运算(避免过度合并裂缝)
-    - 默认不做高斯模糊(OTSU 已能处理大多数情况)
+    v1.1.3 改进:
+    - 新增 otsu_offset 参数 (默认 -30, 让 OTSU 阈值降低 30, 找更暗的裂缝)
+    - 在裂缝样2.png 上能识别中央主裂缝(之前被 OTSU 过滤)
     """
     if image.ndim == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -215,9 +215,16 @@ def _detect_fracture_adaptive(
         blurred = gray
     # 2. 阈值: OTSU 或 自适应
     if params.use_otsu:
-        _, bin_mask = cv2.threshold(
+        otsu_t, bin_mask = cv2.threshold(
             blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU,
         )
+        # v1.1.3: 阈值调整(让 OTSU 阈值降低)
+        # 裂缝通常比 OTSU 自动阈值更暗,降低阈值能找更多裂缝
+        if params.otsu_offset != 0:
+            new_t = max(0, otsu_t + params.otsu_offset)  # offset < 0 降低阈值
+            _, bin_mask = cv2.threshold(
+                blurred, new_t, 255, cv2.THRESH_BINARY_INV,
+            )
     else:
         block = max(3, params.adaptive_block | 1)
         bin_mask = cv2.adaptiveThreshold(
