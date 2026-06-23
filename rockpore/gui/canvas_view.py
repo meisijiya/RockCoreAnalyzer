@@ -368,6 +368,9 @@ class _CanvasSurface(QWidget):
         self.annotations: List[Annotation] = []
         self.tool: CanvasTool = CanvasTool.VIEW
         self.brush_radius: int = 12
+        # v1.1.5: 拖拽式画笔状态
+        self._is_drawing: bool = False
+        self._last_stroke_pos: Optional[Tuple[float, float]] = None
         # 视图
         self.scale: float = 1.0
         self.offset = QPoint(0, 0)
