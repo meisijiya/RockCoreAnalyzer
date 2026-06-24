@@ -74,8 +74,8 @@ class TeachingPanel(QScrollArea):
             }}
         """)
         self.setWidgetResizable(True)
-        self.setMinimumWidth(280)
-        self.setMaximumWidth(380)
+        self.setMinimumWidth(320)
+        self.setMaximumWidth(440)
         self._build_ui()
         self.set_step(None, 0, 0)
 
